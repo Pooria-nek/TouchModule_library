@@ -1,0 +1,13 @@
+{
+  "name": "TouchModule",
+  "version": "0.0.1",
+  "description": "Touch subdevice library for an HDL-Buspro-style RS485 bus.",
+  "keywords": ["relay", "rs485", "hdl", "buspro", "stm32", "home-automation"],
+  "frameworks": "arduino",
+  "platforms": ["ststm32", "atmelavr", "*"],
+  "headers": "TouchModule.h",
+  "dependencies": {
+    "BusproCore": "^0.1.0",
+    "MemoryCore": "^0.1.0"
+  }
+}
