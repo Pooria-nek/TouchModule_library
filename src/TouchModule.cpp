@@ -1,5 +1,7 @@
 #include "TouchModule.h"
 
+TouchModule *TouchModule::pwmInstance_ = nullptr;
+
 TouchModule::TouchModule(
     TwoWire &wirePort,
     BusproTransport &bus,
@@ -19,6 +21,11 @@ TouchModule::TouchModule(
     {
         ledPins_[i] = ledPins[i];
         touchPins_[i] = touchPads[i];
+
+        ledMode_[i] = LedMode::Deactive;
+        ledOn_[i] = false;
+        ledPhaseStart_[i] = 0;
+        ledLevel_[i] = 0;
     }
 }
 
@@ -33,15 +40,17 @@ bool TouchModule::begin()
         pinMode(ledPins_[i], OUTPUT);
     }
 
+    initPwmTimer();
+
     // for (size_t d = 0; d < 3; d++)
     // {
-    for (uint8_t i = 0; i < TOUCH_CHANNEL_COUNT; i++)
-    {
-        //     digitalWrite(ledPins_[i], LOW);
-        //     delay(50);
-        digitalWrite(ledPins_[i], HIGH);
-        delay(500);
-    }
+    //     for (uint8_t i = 0; i < TOUCH_CHANNEL_COUNT; i++)
+    //     {
+    //         //     digitalWrite(ledPins_[i], LOW);
+    //         //     delay(50);
+    //         digitalWrite(ledPins_[i], HIGH);
+    //         delay(500);
+    //     }
     // }
 
     // flash_.eraseSector(memoryaddress_);
@@ -51,7 +60,21 @@ bool TouchModule::begin()
         init();
     }
 
+    // Boot sweep is done — hand LEDs over to the state machine, starting Deactive.
+    setAllLedMode(LedMode::Deactive);
+
+    startupAnimation();
+
     return syncValues();
+}
+
+void TouchModule::update()
+{
+    // Poll the BS8112 for new touch state (call every loop iteration)
+    updateBS8112();
+
+    // Non-blocking — advances LED blink timing / output (call every loop)
+    updateLeds();
 }
 
 bool TouchModule::firstime()
@@ -255,6 +278,12 @@ bool TouchModule::updateBS8112()
         {
             _lastPressTime[key] = now;
             _holdActive &= ~(1 << key);
+
+            // Acknowledge the touch with a single flash. If the channel is
+            // mid-operation (Blinking), leave it alone — don't interrupt
+            // a long-running action's blink with a fresh single-flash.
+            if (ledMode_[key] != LedMode::Blinking)
+                setLedMode(key, LedMode::Blink);
         }
     }
 
@@ -397,6 +426,182 @@ uint8_t TouchModule::readRegister(uint8_t reg)
 /////////////////////////////// BS811x Functions ///////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 
+////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////// LED INDICATOR //////////////////////////////////
+
+void TouchModule::startupAnimation()
+{
+    sweep(0, 8);
+    sweep(8, 2);
+    sweep(2, 12);
+    sweep(12, 0);
+
+    sweep(0, 31);
+
+    for (int i = 0; i < 2; i++)
+    {
+        setLedLevels(16, 31, 31);
+        updateLeds();
+        delay(80);
+
+        setLedLevels(16, 18, 31);
+        updateLeds();
+        delay(60);
+    }
+
+    setLedLevels(16, 31, 31);
+    updateLeds();
+}
+
+void TouchModule::sweep(uint8_t from, uint8_t to)
+{
+    const uint8_t maxLevel = 31;
+    int step = (from < to) ? 1 : -1;
+
+    for (int i = from;; i += step)
+    {
+        setLedLevels(16, i, maxLevel);
+        updateLeds();
+
+        delay(12 + abs(16 - i));
+
+        if (i == to)
+            break;
+    }
+}
+
+void TouchModule::setLedMode(uint8_t channel, LedMode mode)
+{
+    if (channel >= TOUCH_CHANNEL_COUNT)
+        return;
+
+    ledMode_[channel] = mode;
+    ledPhaseStart_[channel] = millis();
+    ledOn_[channel] = true; // any blink sequence starts in its "on" phase
+}
+
+TouchModule::LedMode TouchModule::getLedMode(uint8_t channel) const
+{
+    if (channel >= TOUCH_CHANNEL_COUNT)
+        return LedMode::Deactive;
+    return ledMode_[channel];
+}
+
+void TouchModule::setAllLedMode(LedMode mode)
+{
+    for (uint8_t i = 0; i < TOUCH_CHANNEL_COUNT; i++)
+        setLedMode(i, mode);
+}
+
+void TouchModule::finishOperation(uint8_t channel)
+{
+    // Blinking's action is done — return the LED to a steady Deactive state.
+    setLedMode(channel, LedMode::Deactive);
+}
+
+void TouchModule::setLedLevels(uint8_t activeLevel, uint8_t deactiveLevel, uint8_t blinkLevel)
+{
+    constexpr uint8_t kMax = LED_PWM_LEVELS - 1;
+    ledActiveLevel_ = (activeLevel > kMax) ? kMax : activeLevel;
+    ledDeactiveLevel_ = (deactiveLevel > kMax) ? kMax : deactiveLevel;
+    ledBlinkLevel_ = (blinkLevel > kMax) ? kMax : blinkLevel;
+}
+
+void TouchModule::setLedBlinkTiming(uint16_t op1BlinkMs, uint16_t op2PeriodMs)
+{
+    ledOp1BlinkMs_ = op1BlinkMs;
+    ledOp2PeriodMs_ = op2PeriodMs;
+}
+
+// Sets up the software-PWM tick. On STM32 this uses a TIM3 hardware-timer
+// interrupt running at LED_PWM_FREQUENCY_HZ * LED_PWM_LEVELS (100 Hz * 32
+// levels = 3200 Hz), so the visible refresh rate is 100 Hz with 32 brightness
+// steps. On other cores this is currently a no-op — updateLeds()/pwmTick()
+// fall back to plain on/off (level > 0 => on) rather than true PWM.
+void TouchModule::initPwmTimer()
+{
+    pwmInstance_ = this;
+
+#if defined(ARDUINO_ARCH_STM32)
+    pwmTimer_ = new HardwareTimer(TIM3);
+    pwmTimer_->setOverflow(static_cast<uint32_t>(LED_PWM_FREQUENCY_HZ) * LED_PWM_LEVELS, HERTZ_FORMAT);
+    pwmTimer_->attachInterrupt(pwmIsrTrampoline);
+    pwmTimer_->resume();
+#endif
+}
+
+// ISR trampoline: hardware timer callbacks must be free functions, so this
+// static forwards to the one active TouchModule instance's pwmTick().
+void TouchModule::pwmIsrTrampoline()
+{
+    if (pwmInstance_)
+        pwmInstance_->pwmTick();
+}
+
+// Runs at LED_PWM_FREQUENCY_HZ * LED_PWM_LEVELS inside the timer ISR.
+// Keep this fast — no flash access, no long loops.
+void TouchModule::pwmTick()
+{
+    pwmCounter_++;
+    if (pwmCounter_ >= LED_PWM_LEVELS)
+        pwmCounter_ = 0;
+
+    for (uint8_t i = 0; i < TOUCH_CHANNEL_COUNT; i++)
+    {
+        bool on = (ledLevel_[i] > pwmCounter_);
+        digitalWrite(ledPins_[i], activeHigh_ ? on : !on);
+    }
+}
+
+// Non-blocking, millis()-driven — advances each channel's LedMode/blink
+// timing and updates its *target* brightness (ledLevel_[i]). The actual
+// GPIO toggling that turns that target into visible PWM happens separately,
+// inside pwmTick(), driven by the TIM3 interrupt.
+void TouchModule::updateLeds()
+{
+    uint32_t now = millis();
+
+    for (uint8_t i = 0; i < TOUCH_CHANNEL_COUNT; i++)
+    {
+        switch (ledMode_[i])
+        {
+        case LedMode::Active:
+            ledLevel_[i] = ledActiveLevel_;
+            break;
+
+        case LedMode::Deactive:
+            ledLevel_[i] = ledDeactiveLevel_;
+            break;
+
+        case LedMode::Blink:
+            // Single flash: stay "on" for ledOp1BlinkMs_, then auto-drop to Deactive.
+            if (now - ledPhaseStart_[i] < ledOp1BlinkMs_)
+            {
+                ledLevel_[i] = ledBlinkLevel_;
+            }
+            else
+            {
+                setLedMode(i, LedMode::Deactive);
+            }
+            break;
+
+        case LedMode::Blinking:
+            // Repeating blink until finishOperation() is called from outside
+            // (i.e. once the actual operation is confirmed complete).
+            if (now - ledPhaseStart_[i] >= ledOp2PeriodMs_)
+            {
+                ledPhaseStart_[i] = now;
+                ledOn_[i] = !ledOn_[i];
+            }
+            ledLevel_[i] = ledOn_[i] ? ledBlinkLevel_ : ledDeactiveLevel_;
+            break;
+        }
+    }
+}
+
+/////////////////////////////// LED INDICATOR //////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+
 void TouchModule::process(const BusproFrame &frame)
 {
     // if (frame.devType != devType_)
@@ -471,7 +676,6 @@ void TouchModule::sendResponse(uint16_t opcode, uint16_t dst, const uint8_t *pay
 
 /////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////// UNIVERSAL REQUEST ///////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////
 
 void TouchModule::handleReadFirmware(const BusproFrame &frame)
 {
@@ -577,6 +781,5 @@ void TouchModule::handleModifyDeviceRemark(const BusproFrame &frame)
     sendResponse(BusproOp::DEVICE_REMARK.writeResp(), frame.srcAddress, payload, sizeof(payload));
 }
 
-/////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////// UNIVERSAL REQUEST ///////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////

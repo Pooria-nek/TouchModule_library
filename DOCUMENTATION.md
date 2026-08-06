@@ -109,6 +109,78 @@ These are declared in the header for controlling channel outputs directly (outsi
 
 ---
 
+## LED indicator state machine
+
+Each touch channel has an associated LED, controlled independently as a non-blocking state machine. There are two moving parts:
+
+1. **`updateLeds()`** (called from `loop()`, or via the combined `update()` helper) — millis()-driven, decides each channel's *target brightness* (`ledLevel_[i]`, 0–31) based on its `LedMode` and blink timing.
+2. **A TIM3 hardware-timer interrupt** — the actual software PWM. It ticks at `LED_PWM_FREQUENCY_HZ * LED_PWM_LEVELS` = 100 Hz × 32 = **3200 Hz**, and on each tick compares every channel's target level against a free-running 0–31 counter, driving the GPIO high or low accordingly (classic threshold/counter software PWM). This gives a 100 Hz visible refresh rate with 32 brightness steps, without needing hardware PWM-capable pins.
+
+> **Platform note:** the timer setup (`initPwmTimer()`) uses STM32duino's `HardwareTimer` on `TIM3`, guarded by `#if defined(ARDUINO_ARCH_STM32)`. On other cores (e.g. AVR, also listed as a supported platform in `library.json`) it's currently a no-op, so channels fall back to plain digital on/off (`ledLevel_[i] > 0` behaves like "on"). A real AVR Timer3 implementation would need the ATmega `TCCR3A`/`OCR3A`/`TIMSK3` registers instead — not yet implemented.
+
+```cpp
+enum class LedMode : uint8_t
+{
+    Deactive,  // off — device idle/asleep
+    Active,    // on, steady — ready, no activity
+    Blink,     // blink once — quick acknowledge (e.g. "touch registered")
+    Blinking   // blink continuously until finishOperation() is called —
+               // a longer-running action is in progress
+};
+```
+
+### Methods
+
+| Method | Description |
+|---|---|
+| `void setLedMode(uint8_t channel, LedMode mode)` | Sets a channel's LED mode and resets its blink phase timer. |
+| `LedMode getLedMode(uint8_t channel) const` | Returns the channel's current mode. |
+| `void setAllLedMode(LedMode mode)` | Applies a mode to every channel at once. |
+| `void finishOperation(uint8_t channel)` | Call once a `Blinking` action has actually completed — returns the LED to `Deactive`. |
+| `void setLedLevels(uint8_t activeLevel, uint8_t deactiveLevel, uint8_t blinkLevel = 31)` | Sets the brightness level (0–31) used by `Active`, `Deactive`, and the blink "on" phase. Values above 31 are clamped. |
+| `void setLedBlinkTiming(uint16_t op1BlinkMs, uint16_t op2PeriodMs)` | Configures the `Blink` flash duration and the `Blinking` on/off half-period, in milliseconds. |
+| `void updateLeds()` | **Call every `loop()` iteration** (or via `update()`, below). Non-blocking — advances blink timing and updates each channel's target brightness based on `millis()`. The actual PWM output is driven separately by the TIM3 ISR. |
+
+### `void update()`
+
+Convenience wrapper that calls `updateBS8112()` (touch polling) followed by `updateLeds()` (LED state advance) in one call — the single method you need in `loop()` for both subsystems.
+
+### Default behavior
+
+- The constructor initializes every channel to `Deactive`.
+- `begin()` sets all LED pins to `OUTPUT`, calls `initPwmTimer()` to start the TIM3 tick, runs BS8112 init, then (after `firstime()`/`init()` if needed) calls `setAllLedMode(LedMode::Deactive)` before returning. The earlier boot LED sweep is currently commented out.
+- `updateBS8112()` automatically fires a single `Blink` flash on every fresh touch press (`isPressed` edge), unless that channel is currently `Blinking` (so a long-running action's blink isn't interrupted by the next touch).
+- Defaults: `ledActiveLevel_ = 31` (full), `ledDeactiveLevel_ = 0` (off), `ledBlinkLevel_ = 31`, `Blink` flash `150 ms`, `Blinking` half-period `300 ms`.
+
+### Typical usage
+
+```cpp
+void loop() {
+    touch.update();   // polls touch + advances LEDs, non-blocking
+
+    for (uint8_t ch = 0; ch < 4; ch++) {
+        if (touch.isPressed(ch)) {
+            // Touch already got its quick Blink flash automatically.
+            // Kick off a longer action and show it as in-progress:
+            touch.setLedMode(ch, TouchModule::LedMode::Blinking);
+            startSomeLongRunningAction(ch);
+        }
+
+        if (someLongRunningActionFinished(ch)) {
+            touch.finishOperation(ch);   // LED settles back to Deactive
+        }
+    }
+}
+
+// Turn a channel's LED steady on (e.g. output is currently active):
+touch.setLedMode(3, TouchModule::LedMode::Active);
+
+// Dim the "active" brightness to about 40% (level 12 of 0-31):
+touch.setLedLevels(/*activeLevel=*/12, /*deactiveLevel=*/0, /*blinkLevel=*/31);
+```
+
+---
+
 ## Buspro protocol integration
 
 ### `void process(const BusproFrame &frame)`

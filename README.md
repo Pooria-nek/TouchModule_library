@@ -11,6 +11,12 @@ A touch subdevice library for an **HDL-Buspro-style RS485 bus**, built for STM32
   - `isTouched()` — currently held
   - `isPressed()` / `isReleased()` — single-shot edge detection
   - `isHold()` — held past a configurable hold time (`TOUCH_HOLD_TIME`, default 1000 ms)
+- **Per-channel LED status indicator**, driven as a non-blocking state machine with real (software) brightness control:
+  - `Deactive` — off
+  - `Active` — steady on, brightness configurable
+  - `Blink` — single blink (quick acknowledge, fired automatically on touch press)
+  - `Blinking` — blinks continuously until you call `finishOperation()` once the underlying action completes
+  - Brightness is 32-level software PWM driven by a TIM3 timer interrupt at a 100 Hz refresh rate (STM32; other cores currently fall back to plain on/off — see [DOCUMENTATION.md](./DOCUMENTATION.md))
 - Configurable channel count (1–12, plus AC/DLP panel presets) via compile-time macros, each mapped to the correct **HDL Buspro device type code**.
 - Persists device identity (MAC/UID, bus address, remark strings, hardware/firmware version) to flash via `MemoryCore`.
 - Handles core Buspro "universal" requests out of the box: device search, firmware/hardware version read, find-device (identify), MAC address read/write, device remark read/write.
@@ -83,13 +89,23 @@ void setup() {
 }
 
 void loop() {
-    // Poll the BS8112 for new touch state (call every loop iteration)
-    touch.updateBS8112();
+    // Polls touch state and advances LED blink timing (non-blocking) in one call
+    touch.update();
 
     for (uint8_t ch = 0; ch < 4; ch++) {
-        if (touch.isPressed(ch))  { /* single-shot: channel just pressed */ }
+        if (touch.isPressed(ch)) {
+            // Touch already got an automatic single-flash (Blink).
+            // For a longer action, switch to Blinking and clear it
+            // once the action is actually confirmed done:
+            touch.setLedMode(ch, TouchModule::LedMode::Blinking);
+            startSomeLongRunningAction(ch);
+        }
         if (touch.isReleased(ch)) { /* single-shot: channel just released */ }
         if (touch.isHold(ch))     { /* held past TOUCH_HOLD_TIME */ }
+
+        if (someLongRunningActionFinished(ch)) {
+            touch.finishOperation(ch); // LED returns to Deactive
+        }
     }
 
     // Feed incoming bus frames to let TouchModule answer Buspro requests
@@ -113,6 +129,7 @@ The header (`TouchModule.h`) declares more surface area than is currently implem
 - Construction, `begin()`, `firstime()`, `init()`, `syncValues()`, `maxZone()`
 - BS8112 init/poll (`initBS8112()`, `updateBS8112()`, `irqHandler()`)
 - Touch state queries: `isTouched`, `isPressed`, `isReleased`, `isHold`, `getTouchState`
+- Per-channel LED indicator state machine: `Sleep` / `Idle` / `Operation1` / `Operation2`
 - Buspro universal-request handlers: firmware read, hardware read, find-device, device search, MAC address read/write, device remark read/write
 
 **Declared but not yet implemented** (present in the header, no definition in the `.cpp`)
