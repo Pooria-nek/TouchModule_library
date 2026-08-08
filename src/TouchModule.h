@@ -8,19 +8,7 @@
 #include "MemoryCore.h"
 
 #include "helpers.h"
-
-#if defined(ARDUINO_ARCH_STM32)
-#include <HardwareTimer.h>
-#endif
-
-// --- Software PWM (LED brightness) ---
-// Driven by a TIM3 hardware-timer interrupt on STM32. The ISR ticks at
-// LED_PWM_FREQUENCY_HZ * LED_PWM_LEVELS and compares each channel's target
-// level against a free-running 0..LED_PWM_LEVELS-1 counter (simple
-// threshold/software PWM). On non-STM32 targets this currently falls back
-// to plain digital on/off (level > 0 => on) — see initPwmTimer()/pwmTick().
-constexpr uint16_t LED_PWM_FREQUENCY_HZ = 100; // visible refresh rate
-constexpr uint8_t LED_PWM_LEVELS = 32;         // brightness resolution (0..31)
+#include "LedHandler.h"
 
 #define TOUCH_HOLD_TIME 1000 // ms hold time
 // #define TOUCH_HOLD_REPEAT 600    // ms between repeats after hold
@@ -172,19 +160,13 @@ constexpr uint16_t TOUCH_TYPE = 160; //
 class TouchModule
 {
 public:
-    // --- Per-channel LED indicator state ---
+    // --- Per-channel LED indicator state (see LedHandler.h) ---
     // Deactive : off               - device idle/asleep, low power indicator
     // Active   : on, steady        - ready, steady, no activity
     // Blink    : blink once        - quick acknowledge (e.g. touch registered)
     // Blinking : blink until told to stop - long-running action in progress, call
     //            finishOperation() once the underlying action actually completes
-    enum class LedMode : uint8_t
-    {
-        Deactive = 0,
-        Active,
-        Blink,
-        Blinking
-    };
+    using LedMode = LedHandler<TOUCH_CHANNEL_COUNT>::LedMode;
 
     TouchModule(
         TwoWire &wirePort,
@@ -243,24 +225,31 @@ public:
 
     uint16_t getTouchState() const { return _touchState; }
 
-    // --- LED indicator control ---
-    void setLedMode(uint8_t channel, LedMode mode);
-    LedMode getLedMode(uint8_t channel) const;
-    void setAllLedMode(LedMode mode);
+    // --- LED indicator control (forwards to the internal LedHandler) ---
+    void setLedMode(uint8_t channel, LedMode mode) { leds_.setLedMode(channel, mode); }
+    LedMode getLedMode(uint8_t channel) const { return leds_.getLedMode(channel); }
+    void setAllLedMode(LedMode mode) { leds_.setAllLedMode(mode); }
 
     // Call once a Blinking action has actually finished; LED returns to Deactive.
-    void finishOperation(uint8_t channel);
+    void finishOperation(uint8_t channel) { leds_.finishOperation(channel); }
 
     // Tunable brightness levels, range 0..LED_PWM_LEVELS-1 (0-31). blinkLevel is
     // used for the "on" phase of Blink/Blinking. Values are clamped to range.
-    void setLedLevels(uint8_t activeLevel, uint8_t deactiveLevel, uint8_t blinkLevel = LED_PWM_LEVELS - 1);
-    void setLedBlinkTiming(uint16_t op1BlinkMs, uint16_t op2PeriodMs);
+    void setLedLevels(uint8_t activeLevel, uint8_t deactiveLevel, uint8_t blinkLevel = LED_PWM_LEVELS - 1)
+    {
+        leds_.setLedLevels(activeLevel, deactiveLevel, blinkLevel);
+    }
+    void setLedBlinkTiming(uint16_t blinkMs, uint16_t blinkingPeriodMs)
+    {
+        leds_.setLedBlinkTiming(blinkMs, blinkingPeriodMs);
+    }
 
     // Call every loop(); non-blocking, drives blink timing for all channels.
-    void updateLeds();
+    void updateLeds() { leds_.updateLeds(); }
 
-    void startupAnimation();
-    void sweep(uint8_t from, uint8_t to);
+    // Blocking — call once from setup(), before loop() takes over.
+    void startupAnimation() { leds_.startupAnimation(); }
+    void sweep(uint8_t from, uint8_t to) { leds_.sweep(from, to); }
 
 private:
     void applyTouchHardware(uint8_t channel);
@@ -278,7 +267,6 @@ private:
 
     uint8_t sceneCount = 0;
     uint8_t sceneActive = 0;
-    uint8_t ledPins_[TOUCH_CHANNEL_COUNT];
     // bool touchState_[TOUCH_CHANNEL_COUNT] = {false};
     bool activeHigh_;
 
@@ -310,31 +298,8 @@ private:
     void writeRegister(uint8_t reg, uint8_t value);
     uint8_t readRegister(uint8_t reg);
 
-    // --- LED indicator state ---
-    LedMode ledMode_[TOUCH_CHANNEL_COUNT];
-    bool ledOn_[TOUCH_CHANNEL_COUNT];             // current blink phase (Blink/Blinking)
-    uint32_t ledPhaseStart_[TOUCH_CHANNEL_COUNT]; // millis() timestamp of the current phase
-
-    uint8_t ledActiveLevel_ = LED_PWM_LEVELS - 1; // full brightness
-    uint8_t ledDeactiveLevel_ = 0;                // off
-    uint8_t ledBlinkLevel_ = LED_PWM_LEVELS - 1;  // "on" phase level while blinking
-
-    uint16_t ledOp1BlinkMs_ = 150;  // duration of the single Blink flash
-    uint16_t ledOp2PeriodMs_ = 300; // on/off half-period while Blinking is active
-
-    // --- Software PWM (timer-driven) ---
-    uint8_t ledLevel_[TOUCH_CHANNEL_COUNT]; // current target brightness per channel (0..LED_PWM_LEVELS-1),
-                                            // written by updateLeds(), read by the timer ISR
-
-#if defined(ARDUINO_ARCH_STM32)
-    HardwareTimer *pwmTimer_ = nullptr;
-#endif
-    static TouchModule *pwmInstance_; // for the timer ISR trampoline (one active instance)
-    volatile uint8_t pwmCounter_ = 0; // free-running 0..LED_PWM_LEVELS-1 PWM phase counter
-
-    void initPwmTimer(); // called from begin(); sets up the TIM3 tick
-    void pwmTick();      // runs inside the timer ISR context — keep it short
-    static void pwmIsrTrampoline();
+    // --- LED indicator (state machine + software PWM), see LedHandler.h ---
+    LedHandler<TOUCH_CHANNEL_COUNT> leds_;
 
     /////////////////////////////////////////////////////////////////////////////////////////////
 

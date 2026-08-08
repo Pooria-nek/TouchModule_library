@@ -1,8 +1,8 @@
 {
   "name": "TouchModule",
-  "version": "0.2.0",
-  "description": "Touch subdevice library for an HDL-Buspro-style RS485 bus.",
-  "keywords": ["relay", "rs485", "hdl", "buspro", "stm32", "home-automation"],
+  "version": "0.5.0",
+  "description": "Touch subdevice library for an HDL-Buspro-style RS485 bus, with a software-PWM LED status indicator (BS8112 capacitive touch controller).",
+  "keywords": ["relay", "rs485", "hdl", "buspro", "stm32", "home-automation", "touch", "led", "pwm"],
   "frameworks": "arduino",
   "platforms": ["ststm32", "atmelavr", "*"],
   "headers": "TouchModule.h",

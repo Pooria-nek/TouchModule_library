@@ -11,12 +11,13 @@ A touch subdevice library for an **HDL-Buspro-style RS485 bus**, built for STM32
   - `isTouched()` — currently held
   - `isPressed()` / `isReleased()` — single-shot edge detection
   - `isHold()` — held past a configurable hold time (`TOUCH_HOLD_TIME`, default 1000 ms)
-- **Per-channel LED status indicator**, driven as a non-blocking state machine with real (software) brightness control:
+- **Per-channel LED status indicator** ([`LedHandler.h`](./LedHandler.h) — a standalone, reusable class), driven as a non-blocking state machine with real (software) brightness control:
   - `Deactive` — off
   - `Active` — steady on, brightness configurable
   - `Blink` — single blink (quick acknowledge, fired automatically on touch press)
   - `Blinking` — blinks continuously until you call `finishOperation()` once the underlying action completes
   - Brightness is 32-level software PWM driven by a TIM3 timer interrupt at a 100 Hz refresh rate (STM32; other cores currently fall back to plain on/off — see [DOCUMENTATION.md](./DOCUMENTATION.md))
+  - Includes a small blocking `startupAnimation()` boot sequence
 - Configurable channel count (1–12, plus AC/DLP panel presets) via compile-time macros, each mapped to the correct **HDL Buspro device type code**.
 - Persists device identity (MAC/UID, bus address, remark strings, hardware/firmware version) to flash via `MemoryCore`.
 - Handles core Buspro "universal" requests out of the box: device search, firmware/hardware version read, find-device (identify), MAC address read/write, device remark read/write.
@@ -85,7 +86,7 @@ const uint8_t touchPads[] = {1, 2, 3, 4};  // BS8112 pad index per channel
 TouchModule touch(Wire, bus, flash, /*sectorAddress=*/0x1000, ledPins, touchPads);
 
 void setup() {
-    touch.begin();
+    touch.begin();  // also runs a short blocking startupAnimation() boot sequence
 }
 
 void loop() {
