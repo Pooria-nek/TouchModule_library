@@ -43,6 +43,8 @@ bool TouchModule::begin()
 
     leds_.startupAnimation();
 
+    lastActivityTime_ = millis(); // start the idle timer from "device ready"
+
     return syncValues();
 }
 
@@ -50,6 +52,9 @@ void TouchModule::update()
 {
     // Poll the BS8112 for new touch state (call every loop iteration)
     updateBS8112();
+
+    // Non-blocking — auto-sleep after sleepTimeoutMs_ with no activity
+    checkAutoSleep();
 
     // Non-blocking — advances LED blink timing / output (call every loop)
     leds_.updateLeds();
@@ -250,6 +255,10 @@ bool TouchModule::updateBS8112()
 
     // Update timing for hold detection
     uint32_t now = millis();
+
+    if (_pressedEdge != 0)
+        lastActivityTime_ = now; // any fresh press counts as activity
+
     for (uint8_t key = 0; key < TOUCH_CHANNEL_COUNT; key++)
     {
         if (_pressedEdge & (1 << key))
@@ -257,15 +266,84 @@ bool TouchModule::updateBS8112()
             _lastPressTime[key] = now;
             _holdActive &= ~(1 << key);
 
-            // Acknowledge the touch with a single flash. If the channel is
-            // mid-operation (Blinking), leave it alone — don't interrupt
-            // a long-running action's blink with a fresh single-flash.
-            if (leds_.getLedMode(key) != LedMode::Blinking)
+            if (deviceMode_ == DeviceMode::Sleep)
+            {
+                // Any touch wakes the device — restores every channel's
+                // stored high/low state, so skip the acknowledge flash below.
+                wake();
+            }
+            else if (!keyHigh_[key] && leds_.getLedMode(key) != LedMode::Blinking)
+            {
+                // Acknowledge the touch with a single flash — but only for
+                // channels currently "low". A channel already lit "high"
+                // doesn't need it, and this avoids Blink's auto-return-to-
+                // Deactive fighting with a channel that should stay high.
+                // Also skipped while mid-operation (Blinking).
                 leds_.setLedMode(key, LedMode::Blink);
+            }
         }
     }
 
     return changed;
+}
+
+void TouchModule::sleep()
+{
+    deviceMode_ = DeviceMode::Sleep;
+    leds_.setLedLevels(sleepLevel_, sleepLevel_, sleepLevel_);
+    leds_.setAllLedMode(LedMode::Active); // uniform dim glow across every channel
+}
+
+void TouchModule::wake()
+{
+    deviceMode_ = DeviceMode::Wake;
+    leds_.setLedLevels(wakeHighLevel_, wakeLowLevel_, wakeHighLevel_);
+    for (uint8_t i = 0; i < TOUCH_CHANNEL_COUNT; i++)
+        leds_.setLedMode(i, keyHigh_[i] ? LedMode::Active : LedMode::Deactive);
+
+    lastActivityTime_ = millis(); // waking counts as activity — restart the idle timer
+}
+
+void TouchModule::checkAutoSleep()
+{
+    if (deviceMode_ == DeviceMode::Wake && (millis() - lastActivityTime_ >= sleepTimeoutMs_))
+    {
+        sleep();
+    }
+}
+
+void TouchModule::setKeyHigh(uint8_t channel, bool high)
+{
+    if (channel >= TOUCH_CHANNEL_COUNT)
+        return;
+
+    keyHigh_[channel] = high;
+
+    if (deviceMode_ == DeviceMode::Wake)
+        leds_.setLedMode(channel, high ? LedMode::Active : LedMode::Deactive);
+    // If asleep, the new state is just remembered — wake() will apply it.
+}
+
+bool TouchModule::isKeyHigh(uint8_t channel) const
+{
+    if (channel >= TOUCH_CHANNEL_COUNT)
+        return false;
+    return keyHigh_[channel];
+}
+
+void TouchModule::setSleepLevel(uint8_t level)
+{
+    sleepLevel_ = level;
+    if (deviceMode_ == DeviceMode::Sleep)
+        leds_.setLedLevels(sleepLevel_, sleepLevel_, sleepLevel_);
+}
+
+void TouchModule::setWakeLevels(uint8_t highLevel, uint8_t lowLevel)
+{
+    wakeHighLevel_ = highLevel;
+    wakeLowLevel_ = lowLevel;
+    if (deviceMode_ == DeviceMode::Wake)
+        leds_.setLedLevels(wakeHighLevel_, wakeLowLevel_, wakeHighLevel_);
 }
 
 // it runs till you hold it
@@ -510,12 +588,21 @@ void TouchModule::handleReadHardware(const BusproFrame &frame)
 
 void TouchModule::handleFindDevice(const BusproFrame &frame)
 {
-    if (frame.payloadLen != 0)
+    if (frame.payloadLen != 1)
         return;
+
+    uint8_t duration = frame.payload[0];
+
+    // A FINDIT request counts as activity too — wake() also restarts the idle timer.
+    if (deviceMode_ == DeviceMode::Sleep)
+        wake();
+    else
+        markActivity();
 
     uint8_t payload[8] = {0x00};
 
     sendResponse(BusproOp::DEVICE_FINDIT.resp(), frame.srcAddress, payload, sizeof(payload));
+    leds_.finditAnimation(duration);
 }
 
 void TouchModule::handleSearchDevice(const BusproFrame &frame)

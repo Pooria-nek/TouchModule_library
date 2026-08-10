@@ -168,14 +168,49 @@ public:
     //            finishOperation() once the underlying action actually completes
     using LedMode = LedHandler<TOUCH_CHANNEL_COUNT>::LedMode;
 
-    TouchModule(
-        TwoWire &wirePort,
-        BusproTransport &bus,
-        MemoryCore &flash,
-        uint32_t sectorAddress,
-        const uint8_t touchPins[TOUCH_CHANNEL_COUNT],
-        const uint8_t touchPads[TOUCH_CHANNEL_COUNT],
-        bool activeHigh = true);
+    enum class ButtomMode : uint8_t
+    {
+
+    };
+
+    enum class ButtonType : uint8_t
+    {
+        SingleON = 2,
+        SingleOFF = 3,
+        SingleONOFF = 1,
+        CombinationON = 4,
+        CombinationOFF = 5,
+        CombinationONOFF = 7,
+        DblclickSingle = 10,
+        DblclickCombined = 11,
+        Momentary = 6,
+        ShortLongPress = 17,
+        ShortLongJog = 16,
+        Invalid = 0 // anything else it invalid
+    };
+
+    enum class ButtonOperationType : uint8_t
+    {
+
+        Scene = 55,                // param 1 -> Zone no | param 2 -> Scene no | param 3 -> --- | param 4 -> ---
+        Sequence = 56,             // param 1 -> Zone no | param 2 -> Sequence | param 3 -> --- | param 4 -> ---
+        TimerSwitch = 57,          // param 1 -> Switch no | param 2 -> Switch Statue | param 3 -> --- | param 4 -> ---
+        UniversalSwitch = 58,      // param 1 -> Switch no | param 2 -> Switch Statue | param 3 -> --- | param 4 -> ---
+        SingleChannelControl = 59, // param 1 -> Channel no | param 2 -> Intensity | param 3 -> Running time | param 4 -> ---
+        CurtainSwitch = 60,        // param 1 -> Curtain no | param 2 -> Switch Status | param 3 -> --- | param 4 -> ---
+        GPRSControl = 61,          // param 1 -> Message | param 2 -> no | param 3 -> --- | param 4 -> ---
+        PanelControl = 62,         // param 1 -> Function | param 2 -> par1 | param 3 -> par2 | param 4 -> ---
+        BroadcastScene = 63,       // param 1 -> All Zone | param 2 -> Scene no | param 3 -> --- | param 4 -> ---
+        BroadcastChannel = 64,     // param 1 -> All Channel | param 2 -> Channel no | param 3 -> Running time | param 4 -> ---
+        SecurityModule = 65,       // param 1 -> Zone no | param 2 -> Mode | param 3 -> --- | param 4 -> ---
+        MusicControl = 67,         // param 1 -> par1 | param 2 -> par2 | param 3 -> par3 | param 4 -> ---
+        UniversalControl = 68,     // param 1 -> par1 | param 2 -> par2 | param 3 -> --- | param 4 -> ---
+        InfraredControl = 69,      // param 1 -> par1 | param 2 -> par2 | param 3 -> par3 | param 4 -> ---
+        LogicLightAdjust = 70,     // param 1 -> Logic Light no | param 2 -> Intensity | param 3 -> color no | param 4 -> Duration[s]
+                                   // anything else it invalid
+    };
+
+    TouchModule(TwoWire &wirePort, BusproTransport &bus, MemoryCore &flash, uint32_t sectorAddress, const uint8_t touchPins[TOUCH_CHANNEL_COUNT], const uint8_t touchPads[TOUCH_CHANNEL_COUNT], bool activeHigh = true);
 
     bool begin();
 
@@ -249,7 +284,38 @@ public:
 
     // Blocking — call once from setup(), before loop() takes over.
     void startupAnimation() { leds_.startupAnimation(); }
+    void finditAnimation(uint8_t duration) { leds_.finditAnimation(duration); }
     void sweep(uint8_t from, uint8_t to) { leds_.sweep(from, to); }
+
+    // --- Device mode: Sleep (uniform dim glow, any touch wakes) vs Wake
+    //     (each channel independently shows a "high" or "low" LED state) ---
+    enum class DeviceMode : uint8_t
+    {
+        Sleep,
+        Wake
+    };
+
+    void sleep(); // enter Sleep mode: every channel drops to one dim glow level
+    void wake();  // enter Wake mode: each channel restores its stored high/low state
+    DeviceMode getDeviceMode() const { return deviceMode_; }
+
+    // Sets a channel's logical Wake-mode state: high = lit ("on"), low = off/dim.
+    // Remembered even while asleep, and applied immediately on the next wake().
+    void setKeyHigh(uint8_t channel, bool high);
+    bool isKeyHigh(uint8_t channel) const;
+
+    // Tunable brightness levels (0..LED_PWM_LEVELS-1, 0-31) for Sleep/Wake.
+    void setSleepLevel(uint8_t level);
+    void setWakeLevels(uint8_t highLevel, uint8_t lowLevel);
+
+    // Auto-sleep: if no touch/activity for this many ms while Wake, sleep()
+    // is entered automatically (checked from update()). Default 30000 (30s).
+    void setSleepTimeout(uint32_t ms) { sleepTimeoutMs_ = ms; }
+    uint32_t getSleepTimeout() const { return sleepTimeoutMs_; }
+
+    // Resets the idle timer without changing mode — call if some other
+    // activity (besides a touch press or FINDIT) should also count.
+    void markActivity() { lastActivityTime_ = millis(); }
 
 private:
     void applyTouchHardware(uint8_t channel);
@@ -301,6 +367,19 @@ private:
     // --- LED indicator (state machine + software PWM), see LedHandler.h ---
     LedHandler<TOUCH_CHANNEL_COUNT> leds_;
 
+    // --- Device mode (Sleep/Wake) ---
+    DeviceMode deviceMode_ = DeviceMode::Wake;
+    bool keyHigh_[TOUCH_CHANNEL_COUNT] = {false}; // per-channel high(on)/low(off) state, remembered across sleep
+
+    uint8_t sleepLevel_ = 2;                     // low dim glow while asleep
+    uint8_t wakeHighLevel_ = LED_PWM_LEVELS - 1; // "high" state brightness while awake
+    uint8_t wakeLowLevel_ = 0;                   // "low" state brightness while awake
+
+    uint32_t sleepTimeoutMs_ = 30000; // auto-sleep after this long with no activity
+    uint32_t lastActivityTime_ = 0;   // millis() of the last touch press / FINDIT / markActivity()
+
+    void checkAutoSleep(); // called from update(); enters Sleep once idle past sleepTimeoutMs_
+
     /////////////////////////////////////////////////////////////////////////////////////////////
 
     /////////////////////////////// BASIC INFORMATION ///////////////////////////////
@@ -311,12 +390,12 @@ private:
 
     /////////////////////////////// CURTAIN ///////////////////////////////
 
-    void handleReadZone(const BusproFrame &frame);
-    void handleModifyZone(const BusproFrame &frame);
-    void handleReadZoneRemark(const BusproFrame &frame);
-    void handleModifyZoneRemark(const BusproFrame &frame);
-    void handleReadSceneRemark(const BusproFrame &frame);
-    void handleModifySceneRemark(const BusproFrame &frame);
+    // void handleReadZone(const BusproFrame &frame);
+    // void handleModifyZone(const BusproFrame &frame);
+    // void handleReadZoneRemark(const BusproFrame &frame);
+    // void handleModifyZoneRemark(const BusproFrame &frame);
+    // void handleReadSceneRemark(const BusproFrame &frame);
+    // void handleModifySceneRemark(const BusproFrame &frame);
 
     // Device
     // void handleSearchRequest(const BusproFrame &frame);

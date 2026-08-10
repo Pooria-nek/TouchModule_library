@@ -145,6 +145,7 @@ enum class LedMode : uint8_t
 | `void setLedBlinkTiming(uint16_t blinkMs, uint16_t blinkingPeriodMs)` | Configures the `Blink` flash duration and the `Blinking` on/off half-period, in milliseconds. |
 | `void updateLeds()` | **Call every `loop()` iteration** (or via `update()`, below). Non-blocking — advances blink timing and updates each channel's target brightness based on `millis()`. The actual PWM output is driven separately by the TIM3 ISR. |
 | `void startupAnimation()` | **Blocking** — a short boot animation (channel sweep + a couple of brightness pulses). Call once from `setup()`/`begin()`, never from `loop()`. |
+| `void finditAnimation(uint8_t duration)` | **Blocking** — flashes every channel together for `duration` seconds (fast, easy-to-spot blink), then restores each channel's prior `LedMode`. Wired into `handleFindDevice()` for the Buspro FINDIT command. |
 | `void sweep(uint8_t from, uint8_t to)` | **Blocking** — ramps brightness from `from` to `to` (0–31); the building block `startupAnimation()` is made of. |
 
 ### `void update()`
@@ -200,6 +201,52 @@ touch.setLedLevels(/*activeLevel=*/12, /*deactiveLevel=*/0, /*blinkLevel=*/31);
 
 ---
 
+## Device mode (Sleep / Wake)
+
+A device-level mode sits on top of the per-channel LED state above. It answers "what should the whole panel look like right now" rather than any one channel's state.
+
+```cpp
+enum class DeviceMode : uint8_t
+{
+    Sleep, // every LED shows one uniform dim glow; any touch or FINDIT wakes it
+    Wake   // each channel independently shows its stored high/low state
+};
+```
+
+| Method | Description |
+|---|---|
+| `void sleep()` | Enter `Sleep`: sets every channel's LED level to `sleepLevel_` and mode to `Active`, so they all show one uniform dim glow regardless of individual channel state. |
+| `void wake()` | Enter `Wake`: restores each channel's brightness levels (`wakeHighLevel_`/`wakeLowLevel_`) and sets each channel's `LedMode` back to `Active`/`Deactive` per its stored `keyHigh_[]` state. Also resets the idle timer. |
+| `DeviceMode getDeviceMode() const` | Returns the current mode. |
+| `void setKeyHigh(uint8_t channel, bool high)` | Sets a channel's logical Wake-mode state — `true` ("high"/lit) or `false` ("low"/off-dim). Call this whenever the real thing the channel represents changes (e.g. a relay output toggles). Applied immediately if awake; just remembered if asleep, and applied on the next `wake()`. |
+| `bool isKeyHigh(uint8_t channel) const` | Returns the channel's stored high/low state. |
+| `void setSleepLevel(uint8_t level)` | Sets the `Sleep` glow brightness (0–31). Default `2`. |
+| `void setWakeLevels(uint8_t highLevel, uint8_t lowLevel)` | Sets the `Wake`-mode "high"/"low" brightness levels (0–31). Defaults `31`/`0`. |
+| `void setSleepTimeout(uint32_t ms)` / `uint32_t getSleepTimeout() const` | Auto-sleep idle timeout, checked every `update()`. Default `30000` (30s). |
+| `void markActivity()` | Resets the idle timer without changing mode — for counting some other event as activity. |
+
+### Auto-sleep behavior
+
+- `update()` calls `checkAutoSleep()` every loop iteration: once `millis() - lastActivityTime_ >= sleepTimeoutMs_` while `Wake`, it calls `sleep()` automatically.
+- The idle timer resets on: any fresh touch press (inside `updateBS8112()`), a FINDIT request (whether it wakes the device or the device was already awake), and `wake()` itself.
+- `begin()` sets the idle timer's starting point to "device ready" (right after the boot animation), so the 30s countdown begins from boot, not from `time 0`.
+- There's no separate "wake acknowledge" animation — the LEDs jumping from the uniform sleep glow to each channel's real high/low state on `wake()` is itself the visual feedback.
+- The touch-press acknowledge flash (`Blink`) is skipped for channels currently "high" (see `updateBS8112()`), specifically so it doesn't fight with `Blink`'s auto-return-to-`Deactive` — a "high" channel flashing would otherwise incorrectly settle back to looking "low" once the flash ends.
+
+```cpp
+// Elsewhere in your sketch, whenever a channel's real output changes:
+relay.setChannel(2, true);
+touch.setKeyHigh(2, true);   // LED reflects it immediately if awake
+
+// Put the panel to sleep manually (e.g. from a "goodnight" scene):
+touch.sleep();
+
+// Extend the idle timeout to 2 minutes:
+touch.setSleepTimeout(120000);
+```
+
+---
+
 ## Buspro protocol integration
 
 ### `void process(const BusproFrame &frame)`
@@ -219,7 +266,7 @@ Thin wrapper around `bus_.send()`, automatically filling in this device's addres
 |---|---|---|
 | `handleReadFirmware` | `DEVICE_FIRMWARE.req()` | Responds with the stored software-version string. |
 | `handleReadHardware` | `DEVICE_HARDWARE.req()` | Responds with the stored hardware-version string. |
-| `handleFindDevice` | `DEVICE_FINDIT.req()` | "Identify" — replies with an empty 8-byte payload (implementation stub for a locate/blink action). |
+| `handleFindDevice` | `DEVICE_FINDIT.req()` | "Identify" — requires a 1-byte payload (`duration`, seconds). Wakes the device if asleep (or marks activity if already awake), sends the acknowledgment, then runs the blocking `leds_.finditAnimation(duration)` — every channel blinks fast for `duration` seconds, then restores its prior LED state. |
 | `handleSearchDevice` | `DEVICE_SEARCH_HDL.req()` | Echoes back the first two payload bytes of the search request (discovery response). |
 | `handleReadMacaddress` | `DEVICE_MAC_ADDRESS.readReq()` | Responds with the MCU's unique ID. |
 | `handleModifyMacaddress` | `DEVICE_MAC_ADDRESS.writeReq()` | Validates the request's UID matches this device's UID, then updates and persists the bus address from the last 2 payload bytes. |
@@ -227,7 +274,12 @@ Thin wrapper around `bus_.send()`, automatically filling in this device's addres
 | `handleModifyDeviceRemark` | `DEVICE_REMARK.writeReq()` | Overwrites the stored device remark with the 20-byte payload. |
 
 ### Declared but not yet implemented handlers
-`handleReadZone`, `handleModifyZone`, `handleReadZoneRemark`, `handleModifyZoneRemark`, `handleReadSceneRemark`, `handleModifySceneRemark` — declared in the header for zone/scene configuration over the bus, no definitions yet.
+The zone/scene handler declarations (`handleReadZone`, `handleModifyZone`, `handleReadZoneRemark`, `handleModifyZoneRemark`, `handleReadSceneRemark`, `handleModifySceneRemark`) have been commented out in the header — no definitions exist yet, and `process()` doesn't dispatch to them.
+
+> **Note on `handleFindDevice`:** the response is sent *before* `finditAnimation()` runs, so the bus ack isn't delayed by the blink — but `finditAnimation()` itself is blocking (spins on `updateLeds()` for `duration` seconds), so `process()` won't handle any further frames until it returns. Fine for an occasional "find my device" command; would need rework if FINDIT could plausibly overlap with other time-sensitive bus traffic.
+
+### Reserved/unused enums
+`ButtonType`, `ButtonOperationType`, and the (currently empty) `ButtomMode` are declared on `TouchModule` — these look like they map to HDL Buspro's button-configuration and operation-type codes, but nothing in the library currently constructs or switches on them. Treat them as reserved for a future button-config feature rather than part of the active API.
 
 ---
 

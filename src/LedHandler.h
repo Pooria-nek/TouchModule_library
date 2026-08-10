@@ -156,6 +156,36 @@ public:
         ledBlinkingPeriodMs_ = blinkingPeriodMs;
     }
 
+    // Blocking — flashes every channel together for `duration` seconds, meant
+    // for a "find/identify this device" command (e.g. Buspro DEVICE_FINDIT).
+    // Restores each channel's previous LedMode once finished, so it doesn't
+    // clobber whatever a channel was already doing (e.g. mid-Blinking).
+    void finditAnimation(uint8_t duration)
+    {
+        LedMode previousMode[CHANNEL_COUNT];
+        for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
+            previousMode[i] = ledMode_[i];
+
+        uint16_t prevBlinkMs = ledBlinkMs_;
+        uint16_t prevPeriodMs = ledBlinkingPeriodMs_;
+
+        constexpr uint16_t kIdentifyPeriodMs = 200; // fast on/off half-period, easy to spot
+        setLedBlinkTiming(prevBlinkMs, kIdentifyPeriodMs);
+        setAllLedMode(LedMode::Blinking);
+
+        uint32_t durationMs = static_cast<uint32_t>(duration) * 1000UL;
+        uint32_t start = millis();
+        while (millis() - start < durationMs)
+        {
+            updateLeds();
+        }
+
+        setLedBlinkTiming(prevBlinkMs, prevPeriodMs);
+
+        for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
+            setLedMode(i, previousMode[i]);
+    }
+
     // Small blocking boot animation — call once, before handing control over
     // to updateLeds() in loop(). Uses delay(), so only call it from setup().
     void startupAnimation()
@@ -206,10 +236,10 @@ private:
     bool activeHigh_ = true;
 
     LedMode ledMode_[CHANNEL_COUNT];
-    bool ledOn_[CHANNEL_COUNT];                   // current blink phase (Blink/Blinking)
-    uint32_t ledPhaseStart_[CHANNEL_COUNT];       // millis() timestamp of the current phase
-    uint8_t ledLevel_[CHANNEL_COUNT];             // current target brightness (0..LED_PWM_LEVELS-1),
-                                                   // written by updateLeds(), read by the timer ISR
+    bool ledOn_[CHANNEL_COUNT];             // current blink phase (Blink/Blinking)
+    uint32_t ledPhaseStart_[CHANNEL_COUNT]; // millis() timestamp of the current phase
+    uint8_t ledLevel_[CHANNEL_COUNT];       // current target brightness (0..LED_PWM_LEVELS-1),
+                                            // written by updateLeds(), read by the timer ISR
 
     uint8_t ledActiveLevel_ = LED_PWM_LEVELS - 1; // full brightness
     uint8_t ledDeactiveLevel_ = 0;                // off
