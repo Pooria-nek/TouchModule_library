@@ -10,9 +10,9 @@
 #include "helpers.h"
 #include "LedHandler.h"
 
-#define TOUCH_HOLD_TIME 1000 // ms hold time
-// #define TOUCH_HOLD_REPEAT 600    // ms between repeats after hold
-// #define TOUCH_DOUBLE_TAP_GAP 250 // max gap between taps
+#define TOUCH_HOLD_TIME 1000     // ms hold time
+#define TOUCH_HOLD_REPEAT 600    // ms between repeats after hold
+#define TOUCH_DOUBLE_TAP_GAP 250 // max gap between taps
 
 #define TOUCH4
 
@@ -168,25 +168,20 @@ public:
     //            finishOperation() once the underlying action actually completes
     using LedMode = LedHandler<TOUCH_CHANNEL_COUNT>::LedMode;
 
-    enum class ButtomMode : uint8_t
-    {
-
-    };
-
     enum class ButtonType : uint8_t
     {
-        SingleON = 2,
-        SingleOFF = 3,
-        SingleONOFF = 1,
-        CombinationON = 4,
-        CombinationOFF = 5,
-        CombinationONOFF = 7,
-        DblclickSingle = 10,
-        DblclickCombined = 11,
-        Momentary = 6,
-        ShortLongPress = 17,
-        ShortLongJog = 16,
-        Invalid = 0 // anything else it invalid
+        SingleON = 2,          // 1 opration just turn on
+        SingleOFF = 3,         // 1 opration just turn off
+        SingleONOFF = 1,       // 1 opration do both on off
+        CombinationON = 4,     // 49 opration just turn on
+        CombinationOFF = 5,    // 49 opration just turn on
+        CombinationONOFF = 7,  // 49 opration do both on off
+        DblclickSingle = 10,   // 1 opration on tap | 49 opration double on tap
+        DblclickCombined = 11, // 49 opration on tap | 49 opration double on tap
+        Momentary = 6,         // 1 opration turn on for tap off for release
+        ShortLongPress = 17,   // 49 opration on press | 49 opration on hold trig
+        ShortLongJog = 16,     // 49 opration on press | 49 opration on jog trig (do it till pressed)
+        Invalid = 0            // anything else it invalid
     };
 
     enum class ButtonOperationType : uint8_t
@@ -215,6 +210,8 @@ public:
     bool begin();
 
     void update();
+
+    void buttonUpdate();
 
     bool firstime();
 
@@ -250,13 +247,15 @@ public:
 
     void irqHandler(); // Should be called by external GPIO interrupt service routine
 
+    void setKeyType(uint8_t key, ButtonType type);
+    ButtonType getKeyType(uint8_t key);
+
     // State query methods
-    bool isTouched(uint8_t key);  // Returns true as long as the key is held down
     bool isPressed(uint8_t key);  // Returns true only on the initial press (edge)
     bool isReleased(uint8_t key); // Returns true only on the release (edge)
-    bool isHold(uint8_t key);     // Returns true when held past TOUCH_HOLD_TIME
-    // bool isHoldRepeat(uint8_t key);
-    // bool isDoubleTap(uint8_t key);
+    bool isHold(uint8_t key);     // Returns true as long as the key is held down
+    bool isHoldEdge(uint8_t key); // Returns true when held past TOUCH_HOLD_TIME
+    // bool isDoubleTap(uint8_t key); // Returns true only on the two tap (edge)
 
     uint16_t getTouchState() const { return _touchState; }
 
@@ -318,7 +317,7 @@ public:
     void markActivity() { lastActivityTime_ = millis(); }
 
 private:
-    void applyTouchHardware(uint8_t channel);
+    // void applyTouchHardware(uint8_t channel);
     // void readMcuUID();
 
     uint32_t memoryaddress_; // its the refrens address of data on memoryflash
@@ -340,6 +339,8 @@ private:
     uint8_t touchDelay_[TOUCH_CHANNEL_COUNT] = {0};
     uint8_t touchProtect_[TOUCH_CHANNEL_COUNT] = {0};
 
+    ButtonType keytype_[TOUCH_CHANNEL_COUNT] = {ButtonType::Invalid};
+
     // BS811x values
     TwoWire &_wire;
     volatile bool _irqFlag;
@@ -360,7 +361,7 @@ private:
     uint16_t _holdActive;
 
     // Internal helper methods
-    uint16_t convert(uint16_t touchState); // Re-maps raw sensor bits to custom layout
+    // uint16_t convert(uint16_t touchState); // Re-maps raw sensor bits to custom layout
     void writeRegister(uint8_t reg, uint8_t value);
     uint8_t readRegister(uint8_t reg);
 

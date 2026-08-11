@@ -201,6 +201,86 @@ touch.setLedLevels(/*activeLevel=*/12, /*deactiveLevel=*/0, /*blinkLevel=*/31);
 
 ---
 
+## Button types
+
+Each channel can be assigned a `ButtonType`, which decides *how* its touch gestures translate into a `ButtonEvent` fired to a single registered callback. This is RAM-only (not persisted to flash) and independent of the LED indicator system.
+
+```cpp
+enum class ButtonEvent : uint8_t
+{
+    On,  // e.g. SingleON fired, ONOFF toggled on, short-press fired, double-click detected
+    Off, // e.g. SingleOFF fired, ONOFF toggled off, long-press/hold fired
+    Jog  // ShortLongJog only: repeat tick while held past the hold threshold
+};
+
+using ButtonCallback = void (*)(uint8_t channel, ButtonEvent event);
+```
+
+### Methods
+
+| Method | Description |
+|---|---|
+| `void setButtonType(uint8_t channel, ButtonType type)` | Assigns a channel's gesture behavior. Defaults to `ButtonType::Invalid` (fires nothing) for every channel. Resets any in-progress gesture state (toggle phase, pending double-click, etc.) for that channel. |
+| `ButtonType getButtonType(uint8_t channel) const` | Returns the channel's current type. |
+| `void setButtonCallback(ButtonCallback callback)` | Registers the single callback invoked whenever any channel's gesture fires. There's one callback total, not one per channel — branch on the `channel` argument inside it. |
+| `void setButtonTiming(uint16_t doubleClickGapMs, uint16_t jogIntervalMs)` | Tunes the max gap between taps for `Dblclick*` (default `300` ms) and the repeat interval for `ShortLongJog` (default `500` ms). |
+
+### `void processButtons()`
+
+Called automatically from `update()` every loop iteration — drives every channel's `ButtonType` state machine off the `isPressed()`/`isReleased()`/`isTouched()`/`isHold()` edges computed by the preceding `updateBS8112()` call in the same `update()`.
+
+### What each `ButtonType` fires
+
+| ButtonType | Behavior |
+|---|---|
+| `Invalid` | Fires nothing. |
+| `SingleON` | Fires `On` on every press. |
+| `SingleOFF` | Fires `Off` on every press. |
+| `SingleONOFF` | Toggles per press: fires `On`, then `Off`, then `On`, ... |
+| `CombinationON` / `CombinationOFF` / `CombinationONOFF` | **Currently identical to their `Single*` counterpart above** — see note below. |
+| `Momentary` | Fires `On` on press, `Off` on release — mirrors the touch contact directly (e.g. simulating a doorbell/momentary switch). |
+| `DblclickSingle` / `DblclickCombined` | Fires `On` when two releases land within `doubleClickGapMs` of each other. A lone tap (window expires with no second release) fires nothing. Both variants currently behave the same. |
+| `ShortLongPress` | Release before `TOUCH_HOLD_TIME` (1000 ms default) fires `On` ("short"). Still held when `TOUCH_HOLD_TIME` is crossed fires `Off` ("long"), once. |
+| `ShortLongJog` | Same short/long split as `ShortLongPress`, but once "long" has fired, keeps firing `Jog` every `jogIntervalMs` for as long as the channel stays held — meant for continuous adjustment (e.g. dimmer ramp) while held. |
+
+> **On `Combination*` and short/long semantics — both are assumptions, not spec.** Per design discussion, `Combination*` types are *not* about pairing two physical keys — there's no cross-channel logic here — but no other distinguishing behavior was specified either, so they're implemented as plain aliases of `Single*` for now. Similarly, "short press → `On`, long press → `Off`" for `ShortLongPress`/`ShortLongJog` was picked as a reasonable default, not derived from a spec. Both are easy to change once the actual intended behavior is known — flag it if either doesn't match what you need.
+
+### Typical usage
+
+```cpp
+void onButtonEvent(uint8_t channel, TouchModule::ButtonEvent event)
+{
+    switch (event)
+    {
+    case TouchModule::ButtonEvent::On:
+        relay.setChannel(channel, true);
+        touch.setKeyHigh(channel, true);
+        break;
+    case TouchModule::ButtonEvent::Off:
+        relay.setChannel(channel, false);
+        touch.setKeyHigh(channel, false);
+        break;
+    case TouchModule::ButtonEvent::Jog:
+        dimmer.step(channel, +1);
+        break;
+    }
+}
+
+void setup() {
+    touch.begin();
+    touch.setButtonType(0, TouchModule::ButtonType::SingleONOFF);
+    touch.setButtonType(1, TouchModule::ButtonType::Momentary);
+    touch.setButtonType(2, TouchModule::ButtonType::ShortLongJog);
+    touch.setButtonCallback(onButtonEvent);
+}
+
+void loop() {
+    touch.update(); // also drives processButtons() internally
+}
+```
+
+---
+
 ## Device mode (Sleep / Wake)
 
 A device-level mode sits on top of the per-channel LED state above. It answers "what should the whole panel look like right now" rather than any one channel's state.
@@ -278,8 +358,8 @@ The zone/scene handler declarations (`handleReadZone`, `handleModifyZone`, `hand
 
 > **Note on `handleFindDevice`:** the response is sent *before* `finditAnimation()` runs, so the bus ack isn't delayed by the blink — but `finditAnimation()` itself is blocking (spins on `updateLeds()` for `duration` seconds), so `process()` won't handle any further frames until it returns. Fine for an occasional "find my device" command; would need rework if FINDIT could plausibly overlap with other time-sensitive bus traffic.
 
-### Reserved/unused enums
-`ButtonType`, `ButtonOperationType`, and the (currently empty) `ButtomMode` are declared on `TouchModule` — these look like they map to HDL Buspro's button-configuration and operation-type codes, but nothing in the library currently constructs or switches on them. Treat them as reserved for a future button-config feature rather than part of the active API.
+### `ButtonOperationType` and `ButtomMode` — still reserved
+`ButtonType` is now wired up (see [Button types](#button-types) below). `ButtonOperationType` and the (currently empty) `ButtomMode` remain declared but unused — `ButtonOperationType` looks like it maps to HDL Buspro's per-key bound-action codes (Scene, Sequence, Channel control, ...), for a future step where a fired `ButtonEvent` gets translated into an actual bus action. Nothing in the library currently constructs or switches on either.
 
 ---
 

@@ -19,6 +19,7 @@ A touch subdevice library for an **HDL-Buspro-style RS485 bus**, built for STM32
   - Brightness is 32-level software PWM driven by a TIM3 timer interrupt at a 100 Hz refresh rate (STM32; other cores currently fall back to plain on/off — see [DOCUMENTATION.md](./DOCUMENTATION.md))
   - Includes a small blocking `startupAnimation()` boot sequence, and a `finditAnimation()` identify-blink wired to the Buspro FINDIT command
 - **Device-level Sleep/Wake mode** — `Sleep` shows one uniform dim glow across every channel; any touch or FINDIT wakes the panel and restores each channel's individual high/low state. Auto-sleeps after 30s idle by default (configurable via `setSleepTimeout()`).
+- **Configurable per-channel button behavior** (`ButtonType`: single on/off/toggle, momentary, double-click, short/long press, jog) — fires a single registered callback with the channel and event (`On`/`Off`/`Jog`). RAM-only, not persisted.
 - Configurable channel count (1–12, plus AC/DLP panel presets) via compile-time macros, each mapped to the correct **HDL Buspro device type code**.
 - Persists device identity (MAC/UID, bus address, remark strings, hardware/firmware version) to flash via `MemoryCore`.
 - Handles core Buspro "universal" requests out of the box: device search, firmware/hardware version read, find-device (identify), MAC address read/write, device remark read/write.

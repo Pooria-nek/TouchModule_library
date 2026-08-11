@@ -14,7 +14,7 @@ TouchModule::TouchModule(
       memoryaddress_(sectorAddress),
       activeHigh_(activeHigh)
 {
-    mcu::copyMcuUID(uid_);
+    // mcu::copyMcuUID(uid_);
     for (uint8_t i = 0; i < TOUCH_CHANNEL_COUNT; i++)
     {
         touchPins_[i] = touchPads[i];
@@ -53,6 +53,8 @@ void TouchModule::update()
     // Poll the BS8112 for new touch state (call every loop iteration)
     updateBS8112();
 
+    buttonUpdate();
+
     // Non-blocking — auto-sleep after sleepTimeoutMs_ with no activity
     checkAutoSleep();
 
@@ -60,17 +62,139 @@ void TouchModule::update()
     leds_.updateLeds();
 }
 
+void TouchModule::setKeyType(uint8_t key, ButtonType type)
+{
+    if (key >= TOUCH_CHANNEL_COUNT)
+        return;
+
+    keytype_[key] = type;
+}
+
+TouchModule::ButtonType TouchModule::getKeyType(uint8_t key)
+{
+    if (key >= TOUCH_CHANNEL_COUNT)
+        return ButtonType::Invalid;
+    return keytype_[key];
+}
+
+void TouchModule::buttonUpdate()
+{
+    for (size_t k = 0; k < TOUCH_CHANNEL_COUNT; k++)
+    {
+        if (isPressed(k))
+        {
+            switch (getKeyType(k))
+            {
+            case ButtonType::SingleON:
+                runSingleOn();
+                break;
+
+            case ButtonType::SingleOFF:
+                runSingleOff();
+                break;
+
+            case ButtonType::SingleONOFF:
+                runSingleOnOff();
+                break;
+
+            case ButtonType::CombinationON:
+                runCombinationOn();
+                break;
+
+            case ButtonType::CombinationOFF:
+                runCombinationOff();
+                break;
+
+            case ButtonType::CombinationONOFF:
+                runCombinationOnOff();
+                break;
+
+            case ButtonType::DblclickSingle:
+                runSingleOnOff();
+                break;
+
+            case ButtonType::DblclickCombined:
+                runCombinationOnOff();
+                break;
+
+            case ButtonType::Momentary:
+                runSingleOn();
+                break;
+
+            case ButtonType::ShortLongPress:
+                runCombinationOnOff();
+                break;
+
+            case ButtonType::ShortLongJog:
+                runCombinationOnOff();
+                break;
+            }
+        }
+        else if (isReleased(k))
+        {
+            switch (getKeyType(k))
+            {
+            case ButtonType::Momentary:
+                runSingleOff();
+                break;
+            }
+        }
+        else if (isHoldEdge(k))
+        {
+            switch (getKeyType(k))
+            {
+            case ButtonType::DblclickSingle:
+                runSingleOnOff();
+                break;
+
+            case ButtonType::DblclickCombined:
+                runCombinationOnOff();
+                break;
+
+            case ButtonType::ShortLongPress:
+                runCombinationOnOff();
+                break;
+            }
+        }
+        else if (isHold(k))
+        {
+            switch (getKeyType(k))
+            {
+            case ButtonType::ShortLongJog:
+                runCombinationOnOff();
+                break;
+            }
+        }
+    }
+}
+
+void runSingleOn()
+{
+}
+void runSingleOff()
+{
+}
+void runSingleOnOff()
+{
+}
+
+void runCombinationOn()
+{
+}
+void runCombinationOff()
+{
+}
+void runCombinationOnOff()
+{
+}
+
 bool TouchModule::firstime()
 {
     uint8_t fuid_[12];
     flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_MAC_ADDRESS), fuid_, 12);
 
-    // bool sameUid = (memcmp(fuid_, getMcuUID(), 12) == 0);
-
     uint16_t fdevType;
     flash_.readObject(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_TYPE), fdevType);
-
-    // bool sameType = (devType_ == fdevType);
 
     if ((!mcu::bufferEquals(fuid_, uid_, 12)) || (devType_ != fdevType))
     {
@@ -108,7 +232,7 @@ bool TouchModule::init()
     for (size_t z = 0; z < TOUCH_CHANNEL_COUNT; z++)
     {
         snprintf(remark, sizeof(remark), "Zone %u", static_cast<unsigned>(z));
-        flash_.writeObject(flash_.findAdrress(memoryaddress_, MemoryAdress::zoneRemark(memoryaddress_, z)), remark);
+        flash_.writeObject(flash_.findAdrress(memoryaddress_, MemoryAdress::zoneRemark(z)), remark);
 
         for (size_t s = 0; s < (TOUCH_CHANNEL_COUNT * 2); s++)
         {
@@ -199,10 +323,6 @@ void TouchModule::irqHandler()
     _irqFlag = true;
 }
 
-// // In the header, alongside the other private members:
-// static const uint8_t TOUCH_PADS[] = {11, 2, 10, 3};
-// static const uint8_t TOUCH_CHANNEL_COUNT = sizeof(TOUCH_PADS) / sizeof(TOUCH_PADS[0]);
-
 /**
  * @brief Polls the hardware for state changes on the configured pads only.
  * @return true if any key state changed, false otherwise.
@@ -237,8 +357,7 @@ bool TouchModule::updateBS8112()
 
     // Remap only the configured physical pads into a compact bitfield,
     // where bit i of newState corresponds to TOUCH_PADS[i] (not the raw
-    // hardware bit position). This replaces the old "& 0x0FFF, all 12 bits"
-    // approach.
+    // hardware bit position).
     uint16_t newState = 0;
     for (uint8_t i = 0; i < TOUCH_CHANNEL_COUNT; i++)
     {
@@ -346,8 +465,8 @@ void TouchModule::setWakeLevels(uint8_t highLevel, uint8_t lowLevel)
         leds_.setLedLevels(wakeHighLevel_, wakeLowLevel_, wakeHighLevel_);
 }
 
-// it runs till you hold it
-bool TouchModule::isTouched(uint8_t key)
+// true for the entire duration the channel is held down
+bool TouchModule::isHold(uint8_t key)
 {
     if (key >= TOUCH_CHANNEL_COUNT)
         return false;
@@ -370,12 +489,13 @@ bool TouchModule::isReleased(uint8_t key)
     return (_releasedEdge & (1 << key)) != 0;
 }
 
-bool TouchModule::isHold(uint8_t key)
+// true once, the first time a channel has been held past TOUCH_HOLD_TIME
+bool TouchModule::isHoldEdge(uint8_t key)
 {
     if (key >= TOUCH_CHANNEL_COUNT)
         return false;
 
-    if (isTouched(key))
+    if (isHold(key))
     {
         uint32_t now = millis();
         if (!(_holdActive & (1 << key)) && (now - _lastPressTime[key] >= TOUCH_HOLD_TIME))
@@ -385,77 +505,6 @@ bool TouchModule::isHold(uint8_t key)
         }
     }
     return false;
-}
-
-// bool TouchModule::isHoldRepeat(uint8_t key)
-// {
-//     if (key >= TOUCH_CHANNEL_COUNT)
-//         return false;
-
-//     uint32_t now = millis();
-
-//     // Must be touched and the first hold must have happened
-//     if (!isTouched(key) || !_holdActive[key])
-//         return false;
-
-//     // If time for next repeat
-//     if (now >= _nextRepeatTime[key])
-//     {
-//         _nextRepeatTime[key] = now + TOUCH_HOLD_REPEAT;
-//         return true;
-//     }
-
-//     return false;
-// }
-
-// bool TouchModule::isDoubleTap(uint8_t key)
-// {
-//     if (key >= TOUCH_CHANNEL_COUNT)
-//         return false;
-
-//     uint32_t now = millis();
-
-//     if (isPressed(key))
-//     {
-//         if (_lastReleaseTime[key] != 0 &&
-//             (now - _lastReleaseTime[key] <= TOUCH_DOUBLE_TAP_GAP) &&
-//             (now - _lastPressTime[key] < TOUCH_HOLD_TIME)) // not a hold
-//         {
-//             return true;
-//         }
-//     }
-
-//     return false;
-// }
-
-uint16_t TouchModule::convert(uint16_t touchState)
-{
-    uint16_t result = 0;
-
-    // Map hardware bit output to software logical key index
-    // if (touchState & (1 << X))  result |= (1 << Y);  // bit (X) -> bit (Y)
-    if (touchState & (1 << 1))
-        result |= (1 << 9);
-    if (touchState & (1 << 2))
-        result |= (1 << 1);
-    if (touchState & (1 << 3))
-        result |= (1 << 3);
-    if (touchState & (1 << 4))
-        result |= (1 << 5);
-    if (touchState & (1 << 5))
-        result |= (1 << 7);
-    if (touchState & (1 << 6))
-        result |= (1 << 10);
-    if (touchState & (1 << 7))
-        result |= (1 << 8);
-    if (touchState & (1 << 8))
-        result |= (1 << 6);
-    if (touchState & (1 << 9))
-        result |= (1 << 4);
-    if (touchState & (1 << 10))
-        result |= (1 << 2);
-
-    return result;
 }
 
 void TouchModule::writeRegister(uint8_t reg, uint8_t value)
