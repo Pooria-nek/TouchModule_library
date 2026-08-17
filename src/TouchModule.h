@@ -7,14 +7,19 @@
 #include "BusproDevice.h"
 #include "MemoryCore.h"
 
+#include <stdint.h>
+
 #include "helpers.h"
 #include "LedHandler.h"
+#include "DisplayHandler.h"
 
 #define TOUCH_HOLD_TIME 1000     // ms hold time
 #define TOUCH_HOLD_REPEAT 600    // ms between repeats after hold
 #define TOUCH_DOUBLE_TAP_GAP 250 // max gap between taps
 
-#define TOUCH4
+#define DLP_PANEL
+
+#define HAS_OLED_DISPLAY
 
 // under progress
 #ifdef TOUCH1
@@ -129,6 +134,11 @@ constexpr uint8_t TOUCH_CHANNEL_COUNT = 8; //
 // key
 constexpr uint16_t TOUCH_TYPE = 290; //
 // button
+#elifdef TOUCH10
+constexpr uint8_t TOUCH_CHANNEL_COUNT = 12; //
+// key
+constexpr uint16_t TOUCH_TYPE = 284; // wrong number
+// button
 #elifdef TOUCH12
 constexpr uint8_t TOUCH_CHANNEL_COUNT = 12; //
 // key
@@ -140,7 +150,7 @@ constexpr uint8_t TOUCH_CHANNEL_COUNT = 24; //
 
 // button
 #elifdef DLP_PANEL
-constexpr uint8_t TOUCH_CHANNEL_COUNT = 24; //
+constexpr uint8_t TOUCH_CHANNEL_COUNT = 12; //
 // constexpr uint16_t TOUCH_TYPE = 84;         // no floorheat
 // constexpr uint16_t TOUCH_TYPE = 86;         // no floorheat
 // constexpr uint16_t TOUCH_TYPE = 87;         // no floorheat
@@ -152,6 +162,14 @@ constexpr uint8_t TOUCH_CHANNEL_COUNT = 24; //
 // constexpr uint16_t TOUCH_TYPE = 158;        //
 constexpr uint16_t TOUCH_TYPE = 160; //
 // constexpr uint16_t TOUCH_TYPE = 2058;       //
+#endif
+
+// OLED display pin definitions — only DLP_PANEL and AC_PANEL carry a display
+#ifdef HAS_OLED_DISPLAY
+#define HAS_OLED_DISPLAY
+#define OLED_DC_PIN PA11
+#define OLED_CS_PIN PA15
+#define OLED_RS_PIN PA12
 #endif
 
 // constexpr uint8_t CURTAIN_CHANNEL_COUNT = (TOUCH_CHANNEL_COUNT / 2);
@@ -320,6 +338,13 @@ private:
     // void applyTouchHardware(uint8_t channel);
     // void readMcuUID();
 
+    void runSingleOn();
+    void runSingleOff();
+    void runSingleOnOff();
+    void runCombinationOn();
+    void runCombinationOff();
+    void runCombinationOnOff();
+
     uint32_t memoryaddress_; // its the refrens address of data on memoryflash
 
     BusproTransport &bus_;
@@ -342,7 +367,7 @@ private:
     ButtonType keytype_[TOUCH_CHANNEL_COUNT] = {ButtonType::Invalid};
 
     // BS811x values
-    TwoWire &_wire;
+    TwoWire &wire_;
     volatile bool _irqFlag;
     volatile bool _runAgain;
 
@@ -368,13 +393,18 @@ private:
     // --- LED indicator (state machine + software PWM), see LedHandler.h ---
     LedHandler<TOUCH_CHANNEL_COUNT> leds_;
 
+#ifdef HAS_OLED_DISPLAY
+    // --- OLED Display (UI interface)
+    DisplayHandler display_;
+#endif
+
     // --- Device mode (Sleep/Wake) ---
     DeviceMode deviceMode_ = DeviceMode::Wake;
     bool keyHigh_[TOUCH_CHANNEL_COUNT] = {false}; // per-channel high(on)/low(off) state, remembered across sleep
 
     uint8_t sleepLevel_ = 2;                     // low dim glow while asleep
     uint8_t wakeHighLevel_ = LED_PWM_LEVELS - 1; // "high" state brightness while awake
-    uint8_t wakeLowLevel_ = 0;                   // "low" state brightness while awake
+    uint8_t wakeLowLevel_ = 4;                   // "low" state brightness while awake
 
     uint32_t sleepTimeoutMs_ = 30000; // auto-sleep after this long with no activity
     uint32_t lastActivityTime_ = 0;   // millis() of the last touch press / FINDIT / markActivity()
@@ -383,55 +413,32 @@ private:
 
     /////////////////////////////////////////////////////////////////////////////////////////////
 
+    //////////////////////////////// BUTTON SETTINGS ////////////////////////////////
+
+    // void handleRead(const BusproFrame &frame);
+    // void handleModify(const BusproFrame &frame);
+
+    void handleReadTouchMode(const BusproFrame &frame);
+    void handleModifyTouchMode(const BusproFrame &frame);
+
+    void handleReadTouchRemark(const BusproFrame &frame);
+    void handleModifyTouchRemark(const BusproFrame &frame);
+
+    void handleReadOpration1(const BusproFrame &frame);
+    void handleReadOpration2(const BusproFrame &frame);
+    void handleReadOpration3(const BusproFrame &frame);
+    void handleReadOpration4(const BusproFrame &frame);
+
     /////////////////////////////// BASIC INFORMATION ///////////////////////////////
 
-    /////////////////////////////// ZONE SETTING ///////////////////////////////
+    void handleReadOpration5(const BusproFrame &frame);
+    void handleModifyOpration5(const BusproFrame &frame);
 
-    /////////////////////////////// SCENE SETTING ///////////////////////////////
+    void handleReadOpration6(const BusproFrame &frame);
+    void handleModifyOpration6(const BusproFrame &frame);
 
-    /////////////////////////////// CURTAIN ///////////////////////////////
-
-    // void handleReadZone(const BusproFrame &frame);
-    // void handleModifyZone(const BusproFrame &frame);
-    // void handleReadZoneRemark(const BusproFrame &frame);
-    // void handleModifyZoneRemark(const BusproFrame &frame);
-    // void handleReadSceneRemark(const BusproFrame &frame);
-    // void handleModifySceneRemark(const BusproFrame &frame);
-
-    // Device
-    // void handleSearchRequest(const BusproFrame &frame);
-    // void handleModifyDeviceRemark(const BusproFrame &frame);
-
-    // void handleReadMacaddress(const BusproFrame &frame);
-    // void handleModifyMacaddress(const BusproFrame &frame);
-
-    // // Channel configuration
-    // void handleReadChannelRemark(const BusproFrame &frame);
-    // void handleModifyChannelRemark(const BusproFrame &frame);
-
-    // void handleReadChannelEnable(const BusproFrame &frame);
-    // void handleModifyChannelEnable(const BusproFrame &frame);
-
-    // void handleReadChannelOndelay(const BusproFrame &frame);
-    // void handleModifyChannelOndelay(const BusproFrame &frame);
-
-    // void handleReadChannelOnprotect(const BusproFrame &frame);
-    // void handleModifyChannelOnprotect(const BusproFrame &frame);
-
-    // void handleSceneRead(const BusproFrame &frame);
-    // void handleSceneModify(const BusproFrame &frame);
-
-    // void handleSceneResumeENRead(const BusproFrame &frame);
-    // void handleSceneResumeENModify(const BusproFrame &frame);
-
-    // void handleSceneResumeNumRead(const BusproFrame &frame);
-    // void handleSceneResumeNumModify(const BusproFrame &frame);
-
-    // void handleCurtainRead(const BusproFrame &frame);
-    // void handleCurtainModify(const BusproFrame &frame);
-
-    // // Status
-    // void handleReadStatusRequest(const BusproFrame &frame);
+    void handleReadOpration7(const BusproFrame &frame);
+    void handleModifyOpration7(const BusproFrame &frame);
 
     /////////////////////////////// UNIVERSAL REQUEST ///////////////////////////////
 

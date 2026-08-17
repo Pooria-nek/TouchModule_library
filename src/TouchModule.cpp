@@ -8,11 +8,14 @@ TouchModule::TouchModule(
     const uint8_t ledPins[TOUCH_CHANNEL_COUNT],
     const uint8_t touchPads[TOUCH_CHANNEL_COUNT],
     bool activeHigh)
-    : _wire(wirePort),
-      bus_(bus),
-      flash_(flash),
-      memoryaddress_(sectorAddress),
-      activeHigh_(activeHigh)
+    : wire_(wirePort)
+      , bus_(bus)
+      , flash_(flash)
+      , memoryaddress_(sectorAddress)
+      , activeHigh_(activeHigh)
+#ifdef HAS_OLED_DISPLAY
+      , display_(OLED_CS_PIN, OLED_DC_PIN, OLED_RS_PIN)
+#endif
 {
     // mcu::copyMcuUID(uid_);
     for (uint8_t i = 0; i < TOUCH_CHANNEL_COUNT; i++)
@@ -25,13 +28,18 @@ TouchModule::TouchModule(
 
 bool TouchModule::begin()
 {
-    _wire.begin();
+    wire_.begin();
 
     initBS8112();
 
     leds_.begin();
 
-    // flash_.eraseSector(memoryaddress_);
+#ifdef HAS_OLED_DISPLAY
+    display_.begin();
+    display_.startupAnimation();
+#endif
+
+    flash_.eraseSector(memoryaddress_);
 
     if (firstime())
     {
@@ -83,52 +91,61 @@ void TouchModule::buttonUpdate()
     {
         if (isPressed(k))
         {
-            switch (getKeyType(k))
+            if (leds_.getLedMode(k) == LedMode::Active)
             {
-            case ButtonType::SingleON:
-                runSingleOn();
-                break;
-
-            case ButtonType::SingleOFF:
-                runSingleOff();
-                break;
-
-            case ButtonType::SingleONOFF:
-                runSingleOnOff();
-                break;
-
-            case ButtonType::CombinationON:
-                runCombinationOn();
-                break;
-
-            case ButtonType::CombinationOFF:
-                runCombinationOff();
-                break;
-
-            case ButtonType::CombinationONOFF:
-                runCombinationOnOff();
-                break;
-
-            case ButtonType::DblclickSingle:
-                runSingleOnOff();
-                break;
-
-            case ButtonType::DblclickCombined:
-                runCombinationOnOff();
-                break;
-
-            case ButtonType::Momentary:
-                runSingleOn();
-                break;
-
-            case ButtonType::ShortLongPress:
-                runCombinationOnOff();
-                break;
-
-            case ButtonType::ShortLongJog:
-                runCombinationOnOff();
-                break;
+                leds_.setLedMode(k, LedMode::Deactive);
             }
+            else
+            {
+                leds_.setLedMode(k, LedMode::Active);
+            }
+
+            // switch (getKeyType(k))
+            // {
+            // case ButtonType::SingleON:
+            //     runSingleOn();
+            //     break;
+
+            // case ButtonType::SingleOFF:
+            //     runSingleOff();
+            //     break;
+
+            // case ButtonType::SingleONOFF:
+            //     runSingleOnOff();
+            //     break;
+
+            // case ButtonType::CombinationON:
+            //     runCombinationOn();
+            //     break;
+
+            // case ButtonType::CombinationOFF:
+            //     runCombinationOff();
+            //     break;
+
+            // case ButtonType::CombinationONOFF:
+            //     runCombinationOnOff();
+            //     break;
+
+            // case ButtonType::DblclickSingle:
+            //     runSingleOnOff();
+            //     break;
+
+            // case ButtonType::DblclickCombined:
+            //     runCombinationOnOff();
+            //     break;
+
+            // case ButtonType::Momentary:
+            //     runSingleOn();
+            //     break;
+
+            // case ButtonType::ShortLongPress:
+            //     runCombinationOnOff();
+            //     break;
+
+            // case ButtonType::ShortLongJog:
+            //     runCombinationOnOff();
+            //     break;
+            // }
         }
         else if (isReleased(k))
         {
@@ -168,23 +185,23 @@ void TouchModule::buttonUpdate()
     }
 }
 
-void runSingleOn()
+void TouchModule::runSingleOn()
 {
 }
-void runSingleOff()
+void TouchModule::runSingleOff()
 {
 }
-void runSingleOnOff()
+void TouchModule::runSingleOnOff()
 {
 }
 
-void runCombinationOn()
+void TouchModule::runCombinationOn()
 {
 }
-void runCombinationOff()
+void TouchModule::runCombinationOff()
 {
 }
-void runCombinationOnOff()
+void TouchModule::runCombinationOnOff()
 {
 }
 
@@ -309,13 +326,13 @@ void TouchModule::initBS8112()
         checksum += config[i];
 
     // Write configuration to hardware
-    _wire.beginTransmission(touch_address);
-    _wire.write(0xB0); // Start register
+    wire_.beginTransmission(touch_address);
+    wire_.write(0xB0); // Start register
     for (uint8_t i = 0; i < 17; i++)
-        _wire.write(config[i]);
-    _wire.write(checksum);
+        wire_.write(config[i]);
+    wire_.write(checksum);
 
-    _wire.endTransmission();
+    wire_.endTransmission();
 }
 
 void TouchModule::irqHandler()
@@ -345,19 +362,18 @@ bool TouchModule::updateBS8112()
 
     // Read 2-byte touch status from the device
     uint16_t rawState = 0;
-    _wire.beginTransmission(touch_address);
-    _wire.write(0x08);
-    _wire.endTransmission(false);
-    if (_wire.requestFrom(touch_address, (uint8_t)2) == 2)
+    wire_.beginTransmission(touch_address);
+    wire_.write(0x08);
+    wire_.endTransmission(false);
+    if (wire_.requestFrom(touch_address, (uint8_t)2) == 2)
     {
-        uint8_t low = _wire.read();
-        uint8_t high = _wire.read();
+        uint8_t low = wire_.read();
+        uint8_t high = wire_.read();
         rawState = (static_cast<uint16_t>(high) << 8) | low;
     }
 
     // Remap only the configured physical pads into a compact bitfield,
-    // where bit i of newState corresponds to TOUCH_PADS[i] (not the raw
-    // hardware bit position).
+    // where bit i of newState corresponds to TOUCH_PADS[i] (not the raw hardware bit position).
     uint16_t newState = 0;
     for (uint8_t i = 0; i < TOUCH_CHANNEL_COUNT; i++)
     {
@@ -509,21 +525,21 @@ bool TouchModule::isHoldEdge(uint8_t key)
 
 void TouchModule::writeRegister(uint8_t reg, uint8_t value)
 {
-    _wire.beginTransmission(touch_address);
-    _wire.write(reg);
-    _wire.write(value);
-    _wire.endTransmission();
+    wire_.beginTransmission(touch_address);
+    wire_.write(reg);
+    wire_.write(value);
+    wire_.endTransmission();
 }
 
 uint8_t TouchModule::readRegister(uint8_t reg)
 {
-    _wire.beginTransmission(touch_address);
-    _wire.write(reg);
-    _wire.endTransmission(false);
+    wire_.beginTransmission(touch_address);
+    wire_.write(reg);
+    wire_.endTransmission(false);
 
-    _wire.requestFrom(touch_address, (uint8_t)1);
-    if (_wire.available())
-        return _wire.read();
+    wire_.requestFrom(touch_address, (uint8_t)1);
+    if (wire_.available())
+        return wire_.read();
 
     return 0;
 }
@@ -592,6 +608,56 @@ void TouchModule::process(const BusproFrame &frame)
             break;
 
             /////////////////////////////// DEVICE REQUEST ///////////////////////////////
+
+        case BusproOp::TOUCH_CHANNEL_MODE.writeReq():
+            handleModifyTouchMode(frame);
+            break;
+
+        case BusproOp::TOUCH_CHANNEL_MODE.readReq():
+            handleReadTouchMode(frame);
+            break;
+
+        case BusproOp::TOUCH_CHANNEL_REMARK.writeReq():
+            handleModifyTouchRemark(frame);
+            break;
+
+        case BusproOp::TOUCH_CHANNEL_REMARK.readReq():
+            handleReadTouchRemark(frame);
+            break;
+
+        case BusproOp::TOUCH_OPRATION1.req():
+            handleReadOpration1(frame);
+            break;
+        case BusproOp::TOUCH_OPRATION2.req():
+            handleReadOpration2(frame);
+            break;
+        case BusproOp::TOUCH_OPRATION3.req():
+            handleReadOpration3(frame);
+            break;
+        case BusproOp::TOUCH_OPRATION4.req():
+            handleReadOpration4(frame);
+            break;
+
+        case BusproOp::TOUCH_OPRATION5.readReq():
+            handleReadOpration5(frame);
+            break;
+        case BusproOp::TOUCH_OPRATION5.writeReq():
+            handleModifyOpration5(frame);
+            break;
+
+        case BusproOp::TOUCH_OPRATION6.readReq():
+            handleReadOpration6(frame);
+            break;
+        case BusproOp::TOUCH_OPRATION6.writeReq():
+            handleModifyOpration6(frame);
+            break;
+
+        case BusproOp::TOUCH_OPRATION7.readReq():
+            handleReadOpration7(frame);
+            break;
+        case BusproOp::TOUCH_OPRATION7.writeReq():
+            handleModifyOpration7(frame);
+            break;
         }
     }
 }
@@ -605,7 +671,149 @@ void TouchModule::sendResponse(uint16_t opcode, uint16_t dst, const uint8_t *pay
 /////////////////////////////// DEVICE HANDLERS ////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 
+//////////////////////////////// BUTTON SETTINGS ////////////////////////////////
+
+void TouchModule::handleReadTouchMode(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 0)
+        return;
+
+    uint8_t payload[TOUCH_CHANNEL_COUNT] = {0x00};
+
+    sendResponse(BusproOp::TOUCH_CHANNEL_MODE.readResp(), frame.srcAddress, payload, sizeof(payload));
+}
+
+void TouchModule::handleModifyTouchMode(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 1)
+        return;
+
+    uint8_t payload[1] = {0xF8};
+
+    sendResponse(BusproOp::TOUCH_CHANNEL_MODE.writeResp(), frame.srcAddress, payload, sizeof(payload));
+}
+
+void TouchModule::handleReadTouchRemark(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 1)
+        return;
+
+    uint8_t touchNum = frame.payload[0];
+
+    uint8_t payload[21] = {touchNum};
+
+    sendResponse(BusproOp::TOUCH_CHANNEL_REMARK.readResp(), frame.srcAddress, payload, sizeof(payload));
+}
+
+void TouchModule::handleModifyTouchRemark(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 0)
+        return;
+
+    uint8_t payload[1] = {0xF8};
+
+    sendResponse(BusproOp::TOUCH_CHANNEL_REMARK.writeResp(), frame.srcAddress, payload, sizeof(payload));
+}
+
+void TouchModule::handleReadOpration1(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 0)
+        return;
+
+    uint8_t payload[TOUCH_CHANNEL_COUNT] = {0x01};
+
+    sendResponse(BusproOp::TOUCH_OPRATION1.resp(), frame.srcAddress, payload, sizeof(payload));
+}
+void TouchModule::handleReadOpration2(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 0)
+        return;
+
+    uint8_t payload[TOUCH_CHANNEL_COUNT] = {0x02};
+
+    sendResponse(BusproOp::TOUCH_OPRATION2.resp(), frame.srcAddress, payload, sizeof(payload));
+}
+void TouchModule::handleReadOpration3(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 0)
+        return;
+
+    uint8_t payload[TOUCH_CHANNEL_COUNT] = {0x03};
+
+    sendResponse(BusproOp::TOUCH_OPRATION3.resp(), frame.srcAddress, payload, sizeof(payload));
+}
+
+void TouchModule::handleReadOpration4(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 0)
+        return;
+
+    uint8_t payload[1] = {0xF8};
+
+    sendResponse(BusproOp::TOUCH_OPRATION4.resp(), frame.srcAddress, payload, sizeof(payload));
+}
+
 /////////////////////////////// BASIC INFORMATION ///////////////////////////////
+
+void TouchModule::handleReadOpration5(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 0)
+        return;
+
+    uint8_t payload[2] = {0x00, 0x00}; // Backlight | Status
+
+    sendResponse(BusproOp::TOUCH_OPRATION5.readResp(), frame.srcAddress, payload, sizeof(payload));
+}
+void TouchModule::handleModifyOpration5(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 3)
+        return;
+
+    uint8_t payload[1] = {0xF8};
+
+    sendResponse(BusproOp::TOUCH_OPRATION5.writeResp(), frame.srcAddress, payload, sizeof(payload));
+}
+
+void TouchModule::handleReadOpration6(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 0)
+        return;
+
+    uint8_t payload[3] = {0x00, 0x00, 0x00}; //||
+
+    sendResponse(BusproOp::TOUCH_OPRATION6.readResp(), frame.srcAddress, payload, sizeof(payload));
+}
+void TouchModule::handleModifyOpration6(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 8)
+        return;
+
+    uint8_t payload[1] = {0xF8};
+
+    sendResponse(BusproOp::TOUCH_OPRATION6.writeResp(), frame.srcAddress, payload, sizeof(payload));
+}
+
+void TouchModule::handleReadOpration7(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 0)
+        return;
+
+    uint8_t payload[1] = {0x00};
+
+    sendResponse(BusproOp::TOUCH_OPRATION7.readResp(), frame.srcAddress, payload, sizeof(payload));
+}
+void TouchModule::handleModifyOpration7(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 4)
+        return;
+
+    uint8_t payload[1] = {0xF8};
+
+    sendResponse(BusproOp::TOUCH_OPRATION7.writeResp(), frame.srcAddress, payload, sizeof(payload));
+}
+
+/////////////////////////////// DEVICE HANDLERS ////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 /////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////// UNIVERSAL REQUEST ///////////////////////////////
@@ -652,6 +860,9 @@ void TouchModule::handleFindDevice(const BusproFrame &frame)
 
     sendResponse(BusproOp::DEVICE_FINDIT.resp(), frame.srcAddress, payload, sizeof(payload));
     leds_.finditAnimation(duration);
+#ifdef HAS_OLED_DISPLAY
+    display_.finditAnimation(duration);
+#endif
 }
 
 void TouchModule::handleSearchDevice(const BusproFrame &frame)
