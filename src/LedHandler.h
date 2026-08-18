@@ -190,6 +190,13 @@ public:
     // to updateLeds() in loop(). Uses delay(), so only call it from setup().
     void startupAnimation()
     {
+        // for (size_t i = 0; i < CHANNEL_COUNT; i++)
+        // {
+        //     setLedMode(i, LedMode::Active);
+        //     updateLeds();
+        //     delay(1000);
+        // }
+
         sweep(0, 8);
         sweep(8, 2);
         sweep(2, 12);
@@ -263,7 +270,7 @@ private:
         pwmInstance_ = this;
 
 #if defined(ARDUINO_ARCH_STM32)
-        pwmTimer_ = new HardwareTimer(TIM3);
+        pwmTimer_ = new HardwareTimer(TIM4);
         pwmTimer_->setOverflow(static_cast<uint32_t>(LED_PWM_FREQUENCY_HZ) * LED_PWM_LEVELS, HERTZ_FORMAT);
         pwmTimer_->attachInterrupt(pwmIsrTrampoline);
         pwmTimer_->resume();

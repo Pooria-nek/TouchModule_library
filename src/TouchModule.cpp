@@ -8,13 +8,18 @@ TouchModule::TouchModule(
     const uint8_t ledPins[TOUCH_CHANNEL_COUNT],
     const uint8_t touchPads[TOUCH_CHANNEL_COUNT],
     bool activeHigh)
-    : wire_(wirePort)
-      , bus_(bus)
-      , flash_(flash)
-      , memoryaddress_(sectorAddress)
-      , activeHigh_(activeHigh)
+    : wire_(wirePort), bus_(bus), flash_(flash), memoryaddress_(sectorAddress), activeHigh_(activeHigh)
 #ifdef HAS_OLED_DISPLAY
-      , display_(OLED_CS_PIN, OLED_DC_PIN, OLED_RS_PIN)
+      ,
+      display_(OLED_CS_PIN, OLED_DC_PIN, OLED_RS_PIN)
+#endif
+#ifdef HAS_BUZZER
+      ,
+      buzzer_(PIN_FB_BUZZER)
+#endif
+#ifdef HAS_APDS
+      ,
+      apds_(wirePort)
 #endif
 {
     // mcu::copyMcuUID(uid_);
@@ -37,6 +42,10 @@ bool TouchModule::begin()
 #ifdef HAS_OLED_DISPLAY
     display_.begin();
     display_.startupAnimation();
+#endif
+
+#ifdef HAS_BUZZER
+    buzzer_.startup();
 #endif
 
     flash_.eraseSector(memoryaddress_);
@@ -68,6 +77,10 @@ void TouchModule::update()
 
     // Non-blocking — advances LED blink timing / output (call every loop)
     leds_.updateLeds();
+
+    buzzer_.poll();
+
+    display_.refresh();
 }
 
 void TouchModule::setKeyType(uint8_t key, ButtonType type)
@@ -91,6 +104,8 @@ void TouchModule::buttonUpdate()
     {
         if (isPressed(k))
         {
+            buzzer_.click();
+
             if (leds_.getLedMode(k) == LedMode::Active)
             {
                 leds_.setLedMode(k, LedMode::Deactive);
@@ -99,6 +114,24 @@ void TouchModule::buttonUpdate()
             {
                 leds_.setLedMode(k, LedMode::Active);
             }
+
+            char buf[32];
+            sprintf(buf, "%02X", k);
+            // DebugPort.printf("JEDEC: %02X %02X %02X\r\n", m, t, c);
+            display_.drawText(0, 16, buf);
+
+            display_.send();
+
+#ifdef HAS_OLED_DISPLAY
+            if (k == 8)
+            {
+                display_.prevPage();
+            }
+            if (k == 9)
+            {
+                display_.nextPage();
+            }
+#endif
 
             // switch (getKeyType(k))
             // {
@@ -335,9 +368,9 @@ void TouchModule::initBS8112()
     wire_.endTransmission();
 }
 
-void TouchModule::irqHandler()
+void TouchModule::irqTouchHandler()
 {
-    _irqFlag = true;
+    irqTouchFlag_ = true;
 }
 
 /**
@@ -346,13 +379,13 @@ void TouchModule::irqHandler()
  */
 bool TouchModule::updateBS8112()
 {
-    if (!_irqFlag && !_runAgain)
+    if (!irqTouchFlag_ && !_runAgain)
         return false;
 
     // Manage IRQ flag for continuous polling if required
-    if (_irqFlag)
+    if (irqTouchFlag_)
     {
-        _irqFlag = false;
+        irqTouchFlag_ = false;
         _runAgain = true;
     }
     else

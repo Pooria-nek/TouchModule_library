@@ -12,6 +12,8 @@
 #include "helpers.h"
 #include "LedHandler.h"
 #include "DisplayHandler.h"
+#include "BuzzerHandler.h"
+#include "APDSHandler.h"
 
 #define TOUCH_HOLD_TIME 1000     // ms hold time
 #define TOUCH_HOLD_REPEAT 600    // ms between repeats after hold
@@ -20,6 +22,8 @@
 #define DLP_PANEL
 
 #define HAS_OLED_DISPLAY
+#define HAS_BUZZER
+#define HAS_APDS
 
 // under progress
 #ifdef TOUCH1
@@ -150,7 +154,7 @@ constexpr uint8_t TOUCH_CHANNEL_COUNT = 24; //
 
 // button
 #elifdef DLP_PANEL
-constexpr uint8_t TOUCH_CHANNEL_COUNT = 12; //
+constexpr uint8_t TOUCH_CHANNEL_COUNT = 10; //
 // constexpr uint16_t TOUCH_TYPE = 84;         // no floorheat
 // constexpr uint16_t TOUCH_TYPE = 86;         // no floorheat
 // constexpr uint16_t TOUCH_TYPE = 87;         // no floorheat
@@ -166,10 +170,13 @@ constexpr uint16_t TOUCH_TYPE = 160; //
 
 // OLED display pin definitions — only DLP_PANEL and AC_PANEL carry a display
 #ifdef HAS_OLED_DISPLAY
-#define HAS_OLED_DISPLAY
 #define OLED_DC_PIN PA11
 #define OLED_CS_PIN PA15
 #define OLED_RS_PIN PA12
+#endif
+
+#ifdef HAS_BUZZER
+#define PIN_FB_BUZZER PB3
 #endif
 
 // constexpr uint8_t CURTAIN_CHANNEL_COUNT = (TOUCH_CHANNEL_COUNT / 2);
@@ -263,7 +270,7 @@ public:
 
     bool updateBS8112();
 
-    void irqHandler(); // Should be called by external GPIO interrupt service routine
+    void irqTouchHandler(); // Should be called by external GPIO interrupt service routine
 
     void setKeyType(uint8_t key, ButtonType type);
     ButtonType getKeyType(uint8_t key);
@@ -368,7 +375,7 @@ private:
 
     // BS811x values
     TwoWire &wire_;
-    volatile bool _irqFlag;
+    volatile bool irqTouchFlag_;
     volatile bool _runAgain;
 
     uint8_t touch_address = 0x50; // i2c addresss of bs8112
@@ -396,6 +403,16 @@ private:
 #ifdef HAS_OLED_DISPLAY
     // --- OLED Display (UI interface)
     DisplayHandler display_;
+#endif
+
+#ifdef HAS_BUZZER
+    BuzzerHandler buzzer_;
+#endif
+
+#ifdef HAS_APDS
+    APDSHandler apds_;
+
+    volatile bool irqProxFlag_;
 #endif
 
     // --- Device mode (Sleep/Wake) ---

@@ -144,19 +144,19 @@ void DisplayHandler::drawContent()
     //     }
     // }
     // else
-    if (_ecoMode)
-    {
-        if (_ecoMode)
-        {
-            drawScreensaver();
-        }
-        else
-        {
-            drawScreenoff();
-        }
-    }
-    else
-    {
+    // if (_ecoMode)
+    // {
+    //     if (_ecoMode)
+    //     {
+    //         drawScreensaver();
+    //     }
+    //     else
+    //     {
+    //         drawScreenoff();
+    //     }
+    // }
+    // else
+    // {
         switch (currentPage)
         {
         case 1:
@@ -184,7 +184,7 @@ void DisplayHandler::drawContent()
             drawMusicPage();
             break;
         }
-    }
+    // }
 }
 
 void DisplayHandler::drawScreen()
