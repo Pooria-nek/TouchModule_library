@@ -5,8 +5,17 @@
  * @brief Constructor - Instantiates APDSHandler object
  */
 APDSHandler::APDSHandler(TwoWire &wirePort)
-    : _wire(wirePort),
-      _irqFlag(false)
+    : wire_(wirePort),
+      irqFlag_(false),
+      lastProximity_(0),
+      lastLux_(0),
+      proximityFarThreshold_(500),
+      proximityNearThreshold_(700),
+      proximityNear_(false),
+      darkThreshold_(20),
+      brightThreshold_(200),
+      minBrightness_(10),
+      maxBrightness_(100)
 {
 }
 
@@ -27,7 +36,7 @@ bool APDSHandler::init()
     uint8_t id;
 
     /* Initialize I2C */
-    _wire.begin();
+    wire_.begin();
 
     /* Read ID register and check against known values for APDS-9930 */
     if (!wireReadDataByte(APDS9930_ID, id))
@@ -40,7 +49,7 @@ bool APDSHandler::init()
     }
 
     /* Set ENABLE register to 0 (disable all features) */
-    if (!setMode(ALL, OFF))
+    if (!setMode(ALL, ON))
     {
         return false;
     }
@@ -113,44 +122,170 @@ bool APDSHandler::init()
 
 void APDSHandler::irqHandler()
 {
-    _irqFlag = true;
+    irqFlag_ = true;
 }
 
 void APDSHandler::update()
 {
-    if (!_irqFlag)
-        return;
+    uint16_t prox;
+    unsigned long lux;
 
-    // Clear hardware interrupt — safe to do here (not inside ISR)
-    if (!clearAllInts())
+    /*
+     * Read proximity
+     */
+    if (readProximity(prox))
     {
-        // Optional: log or set an error flag
-        // Serial.println("APDS: failed to clear interrupt!");
+        lastProximity_ = prox;
+
+        /*
+         * Hysteresis:
+         *
+         * FAR -> NEAR only above near threshold
+         * NEAR -> FAR only below far threshold
+         */
+        if (!proximityNear_ &&
+            lastProximity_ >= proximityNearThreshold_)
+        {
+            proximityNear_ = true;
+        }
+        else if (proximityNear_ &&
+                 lastProximity_ <= proximityFarThreshold_)
+        {
+            proximityNear_ = false;
+        }
     }
 
-    // Reset software flag
-    _irqFlag = false;
+    /*
+     * Read ambient light
+     */
+    if (readAmbientLightLux(lux))
+    {
+        lastLux_ = lux;
+    }
+}
 
-    // // Optional: read fresh sensor values
-    // // (If you want auto-updating)
-    // uint16_t prox;
-    // unsigned long lux;
+void APDSHandler::setProximityThresholds(uint16_t farThreshold,
+                                         uint16_t nearThreshold)
+{
+    if (farThreshold >= nearThreshold)
+        return;
 
-    // if (readProximity(prox))
-    //     _lastProximity = prox;
+    proximityFarThreshold_ = farThreshold;
+    proximityNearThreshold_ = nearThreshold;
 
-    // if (readAmbientLightLux(lux))
-    //     _lastLux = lux;
+    /*
+     * Re-evaluate current state immediately.
+     */
+    if (lastProximity_ >= proximityNearThreshold_)
+    {
+        proximityNear_ = true;
+    }
+    else if (lastProximity_ <= proximityFarThreshold_)
+    {
+        proximityNear_ = false;
+    }
+}
+
+bool APDSHandler::isNear() const
+{
+    return proximityNear_;
+}
+
+bool APDSHandler::isFar() const
+{
+    return !proximityNear_;
+}
+
+uint16_t APDSHandler::getProximityNearThreshold() const
+{
+    return proximityNearThreshold_;
+}
+
+uint16_t APDSHandler::getProximityFarThreshold() const
+{
+    return proximityFarThreshold_;
+}
+
+void APDSHandler::setLightThresholds(unsigned long darkThreshold,
+                                      unsigned long brightThreshold)
+{
+    if (darkThreshold >= brightThreshold)
+        return;
+
+    darkThreshold_ = darkThreshold;
+    brightThreshold_ = brightThreshold;
+}
+
+bool APDSHandler::isDark() const
+{
+    return lastLux_ <= darkThreshold_;
+}
+
+bool APDSHandler::isBright() const
+{
+    return lastLux_ >= brightThreshold_;
+}
+
+unsigned long APDSHandler::getDarkThreshold() const
+{
+    return darkThreshold_;
+}
+
+unsigned long APDSHandler::getBrightThreshold() const
+{
+    return brightThreshold_;
+}
+
+void APDSHandler::setBrightnessRange(uint8_t minBrightness,
+                                      uint8_t maxBrightness)
+{
+    if (minBrightness > 100)
+        minBrightness = 100;
+
+    if (maxBrightness > 100)
+        maxBrightness = 100;
+
+    if (minBrightness > maxBrightness)
+    {
+        uint8_t temp = minBrightness;
+        minBrightness = maxBrightness;
+        maxBrightness = temp;
+    }
+
+    minBrightness_ = minBrightness;
+    maxBrightness_ = maxBrightness;
+}
+
+uint8_t APDSHandler::getAutoBrightness() const
+{
+    if (lastLux_ <= darkThreshold_)
+        return minBrightness_;
+
+    if (lastLux_ >= brightThreshold_)
+        return maxBrightness_;
+
+    const unsigned long luxRange =
+        brightThreshold_ - darkThreshold_;
+
+    const unsigned long luxPosition =
+        lastLux_ - darkThreshold_;
+
+    const uint16_t brightnessRange =
+        maxBrightness_ - minBrightness_;
+
+    return minBrightness_ +
+           (uint32_t(luxPosition) * brightnessRange) /
+           luxRange;
 }
 
 uint16_t APDSHandler::getProximity()
 {
-    return _lastProximity;
+    return lastProximity_;
 }
 
 unsigned long APDSHandler::getAmbientLightLux()
 {
-    return _lastLux;
+    return lastLux_;
 }
 
 /*******************************************************************************
@@ -1139,9 +1274,9 @@ bool APDSHandler::clearAllInts()
  */
 bool APDSHandler::wireWriteByte(uint8_t val)
 {
-    _wire.beginTransmission(APDS9930_I2C_ADDR);
-    _wire.write(val);
-    if (_wire.endTransmission() != 0)
+    wire_.beginTransmission(APDS9930_I2C_ADDR);
+    wire_.write(val);
+    if (wire_.endTransmission() != 0)
     {
         return false;
     }
@@ -1158,10 +1293,10 @@ bool APDSHandler::wireWriteByte(uint8_t val)
  */
 bool APDSHandler::wireWriteDataByte(uint8_t reg, uint8_t val)
 {
-    _wire.beginTransmission(APDS9930_I2C_ADDR);
-    _wire.write(reg | AUTO_INCREMENT);
-    _wire.write(val);
-    if (_wire.endTransmission() != 0)
+    wire_.beginTransmission(APDS9930_I2C_ADDR);
+    wire_.write(reg | AUTO_INCREMENT);
+    wire_.write(val);
+    if (wire_.endTransmission() != 0)
     {
         return false;
     }
@@ -1181,15 +1316,15 @@ bool APDSHandler::wireWriteDataBlock(uint8_t reg, uint8_t *val, unsigned int len
 {
     unsigned int i;
 
-    _wire.beginTransmission(APDS9930_I2C_ADDR);
-    _wire.write(reg | AUTO_INCREMENT);
+    wire_.beginTransmission(APDS9930_I2C_ADDR);
+    wire_.write(reg | AUTO_INCREMENT);
 
     for (i = 0; i < len; i++)
     {
-        _wire.write(val[i]);
+        wire_.write(val[i]);
     }
 
-    return (_wire.endTransmission() == 0);
+    return (wire_.endTransmission() == 0);
 }
 
 /**
@@ -1209,15 +1344,15 @@ bool APDSHandler::wireReadDataByte(uint8_t reg, uint8_t &val)
     }
 
     /* Read from register */
-    uint8_t received = _wire.requestFrom(APDS9930_I2C_ADDR, (uint8_t)1);
+    uint8_t received = wire_.requestFrom(APDS9930_I2C_ADDR, (uint8_t)1);
     if (received != 1)
     {
         return false;
     }
 
-    if (_wire.available())
+    if (wire_.available())
     {
-        val = _wire.read();
+        val = wire_.read();
         return true;
     }
 
@@ -1241,16 +1376,16 @@ int APDSHandler::wireReadDataBlock(uint8_t reg, uint8_t *val, unsigned int len)
     }
 
     /* Read block data */
-    uint8_t received = _wire.requestFrom(APDS9930_I2C_ADDR, (uint8_t)len);
+    uint8_t received = wire_.requestFrom(APDS9930_I2C_ADDR, (uint8_t)len);
     if (received == 0)
     {
         return -1;
     }
 
     unsigned int i = 0;
-    while (_wire.available() && i < len)
+    while (wire_.available() && i < len)
     {
-        val[i++] = _wire.read();
+        val[i++] = wire_.read();
     }
 
     return i;

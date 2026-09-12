@@ -135,89 +135,80 @@ enum
 class APDSHandler
 {
 public:
-    /* Initialization methods */
-    APDSHandler(TwoWire &wirePort);
+    /* Initialization methods */ APDSHandler(TwoWire &wirePort);
     ~APDSHandler();
     bool init();
     void update();
     void irqHandler();
     uint8_t getMode();
-    bool setMode(uint8_t mode, uint8_t enable);
-
-    /* Turn the APDS-9930 on and off */
+    bool setMode(uint8_t mode, uint8_t enable); /* Turn the APDS-9930 on and off */
     bool enablePower();
-    bool disablePower();
-
-    /* Enable or disable specific sensors */
+    bool disablePower(); /* Enable or disable specific sensors */
     bool enableLightSensor(bool interrupts = false);
     bool disableLightSensor();
     bool enableProximitySensor(bool interrupts = false);
-    bool disableProximitySensor();
-
-    /* LED drive strength control */
+    bool disableProximitySensor(); /* LED drive strength control */
     uint8_t getLEDDrive();
-    bool setLEDDrive(uint8_t drive);
-
-    /* Gain control */
+    bool setLEDDrive(uint8_t drive); /* Gain control */
     uint8_t getAmbientLightGain();
     bool setAmbientLightGain(uint8_t gain);
     uint8_t getProximityGain();
     bool setProximityGain(uint8_t gain);
     bool setProximityDiode(uint8_t drive);
-    uint8_t getProximityDiode();
-
-    /* Get and set light interrupt thresholds */
-    bool getLightIntLowThreshold(uint16_t &threshold);
-    bool setLightIntLowThreshold(uint16_t threshold);
-    bool getLightIntHighThreshold(uint16_t &threshold);
-    bool setLightIntHighThreshold(uint16_t threshold);
-
-    /* Get and set interrupt enables */
-
-    uint8_t getAmbientLightIntEnable();
-    bool setAmbientLightIntEnable(uint8_t enable);
-    uint8_t getProximityIntEnable();
-    bool setProximityIntEnable(uint8_t enable);
-
-    /* Clear interrupts */
-    bool clearAmbientLightInt();
-    bool clearProximityInt();
-    bool clearAllInts();
-
-    /* Proximity methods */
-    bool readProximity(uint16_t &val);
-
-    /* Ambient light methods */
+    uint8_t getProximityDiode(); /* Light */
     bool readAmbientLightLux(unsigned long &val);
     float floatAmbientToLux(uint16_t Ch0, uint16_t Ch1);
     unsigned long ulongAmbientToLux(uint16_t Ch0, uint16_t Ch1);
     bool readCh0Light(uint16_t &val);
-    bool readCh1Light(uint16_t &val);
-
+    bool readCh1Light(uint16_t &val); /* Proximity */
+    bool readProximity(uint16_t &val);
     uint16_t getProximity();
-    unsigned long getAmbientLightLux();
-
+    unsigned long getAmbientLightLux(); /* * Proximity detection * * nearThreshold: * Value above which the object is considered NEAR. * * farThreshold: * Value below which the object is considered FAR. * * The difference between them provides hysteresis. */
+    void setProximityThresholds(uint16_t farThreshold, uint16_t nearThreshold);
+    bool isNear() const;
+    bool isFar() const;
+    uint16_t getProximityNearThreshold() const;
+    uint16_t getProximityFarThreshold() const; /* Ambient light state */
+    void setLightThresholds(unsigned long darkThreshold, unsigned long brightThreshold);
+    bool isDark() const;
+    bool isBright() const;
+    unsigned long getDarkThreshold() const;
+    unsigned long getBrightThreshold() const;                              /* * Automatic display brightness * * Returns 0-100%. */
+    uint8_t getAutoBrightness() const;                                     /* * Configure the brightness range returned by * getAutoBrightness(). */
+    void setBrightnessRange(uint8_t minBrightness, uint8_t maxBrightness); /* Get and set light interrupt thresholds */
+    bool getLightIntLowThreshold(uint16_t &threshold);
+    bool setLightIntLowThreshold(uint16_t threshold);
+    bool getLightIntHighThreshold(uint16_t &threshold);
+    bool setLightIntHighThreshold(uint16_t threshold); /* Get and set interrupt enables */
+    uint8_t getAmbientLightIntEnable();
+    bool setAmbientLightIntEnable(uint8_t enable);
+    uint8_t getProximityIntEnable();
+    bool setProximityIntEnable(uint8_t enable); /* Clear interrupts */
+    bool clearAmbientLightInt();
+    bool clearProximityInt();
+    bool clearAllInts();
     uint16_t getProximityIntLowThreshold();
     bool setProximityIntLowThreshold(uint16_t threshold);
     uint16_t getProximityIntHighThreshold();
     bool setProximityIntHighThreshold(uint16_t threshold);
 
 private:
-    TwoWire &_wire;
-    volatile bool _irqFlag;
-
-    uint16_t _lastProximity;
-    unsigned long _lastLux;
-
+    TwoWire &wire_;
+    volatile bool irqFlag_;
+    uint16_t lastProximity_;
+    unsigned long lastLux_;
     uint16_t proximity_data = 0;
     unsigned long ambient_light_lux_int = 0;
     float ambient_light_lux_float = 0;
     uint16_t ch0_light = 0;
-    uint16_t ch1_light = 0;
-
-    /* Proximity Interrupt Threshold */
-
-    /* Raw I2C Commands */
+    uint16_t ch1_light = 0; /* Proximity hysteresis */
+    uint16_t proximityFarThreshold_;
+    uint16_t proximityNearThreshold_;
+    bool proximityNear_; /* Ambient light thresholds */
+    unsigned long darkThreshold_;
+    unsigned long brightThreshold_; /* Automatic display brightness */
+    uint8_t minBrightness_;
+    uint8_t maxBrightness_; /* Raw I2C Commands */
     bool wireWriteByte(uint8_t val);
     bool wireWriteDataByte(uint8_t reg, uint8_t val);
     bool wireWriteDataBlock(uint8_t reg, uint8_t *val, unsigned int len);

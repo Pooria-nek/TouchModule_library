@@ -21,8 +21,10 @@ constexpr uint8_t LED_PWM_LEVELS = 32;         // brightness resolution (0..31)
 // state machine (Deactive/Active/Blink/Blinking), software-PWM brightness,
 // and a small boot animation.
 //
-// Header-only (template), so it can be sized to any TouchModule's
-// TOUCH_CHANNEL_COUNT without a separate .cpp per instantiation.
+// Template, so it can be sized to any TouchModule's TOUCH_CHANNEL_COUNT.
+// Method bodies live in LedHandler.tpp (included at the bottom of this
+// file) rather than here, to keep the declaration readable — this is
+// still effectively header-only, as required for a class template.
 //
 // NOTE: only one LedHandler instance can own the TIM3 tick at a time (see
 // pwmInstance_) — fine for a single touch panel per MCU, but if a board
@@ -43,200 +45,45 @@ public:
     LedHandler() = default;
 
     // Stores the per-channel output pin and polarity. Call before begin().
-    void configure(const uint8_t ledPins[CHANNEL_COUNT], bool activeHigh = true)
-    {
-        activeHigh_ = activeHigh;
-        for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
-        {
-            ledPins_[i] = ledPins[i];
-            ledMode_[i] = LedMode::Deactive;
-            ledOn_[i] = false;
-            ledPhaseStart_[i] = 0;
-            ledLevel_[i] = 0;
-        }
-    }
+    void configure(const uint8_t ledPins[CHANNEL_COUNT], bool activeHigh = true);
 
     // Sets all pins to OUTPUT and starts the software-PWM timer tick.
-    void begin()
-    {
-        for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
-            pinMode(ledPins_[i], OUTPUT);
-
-        initPwmTimer();
-    }
+    void begin();
 
     // Non-blocking, millis()-driven — advances each channel's LedMode/blink
     // timing and updates its *target* brightness (ledLevel_[i]). The actual
     // GPIO toggling happens separately, inside pwmTick(), driven by the
     // timer interrupt. Call every loop().
-    void updateLeds()
-    {
-        uint32_t now = millis();
+    void updateLeds();
 
-        for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
-        {
-            switch (ledMode_[i])
-            {
-            case LedMode::Active:
-                ledLevel_[i] = ledActiveLevel_;
-                break;
+    void setLedMode(uint8_t channel, LedMode mode);
 
-            case LedMode::Deactive:
-                ledLevel_[i] = ledDeactiveLevel_;
-                break;
+    LedMode getLedMode(uint8_t channel) const;
 
-            case LedMode::Blink:
-                // Single flash: stay "on" for ledBlinkMs_, then auto-drop to Deactive.
-                if (now - ledPhaseStart_[i] < ledBlinkMs_)
-                {
-                    ledLevel_[i] = ledBlinkLevel_;
-                }
-                else
-                {
-                    setLedMode(i, LedMode::Deactive);
-                }
-                break;
-
-            case LedMode::Blinking:
-                // Repeating blink until finishOperation() is called from
-                // outside (i.e. once the actual operation is confirmed done).
-                if (now - ledPhaseStart_[i] >= ledBlinkingPeriodMs_)
-                {
-                    ledPhaseStart_[i] = now;
-                    ledOn_[i] = !ledOn_[i];
-                }
-                ledLevel_[i] = ledOn_[i] ? ledBlinkLevel_ : ledDeactiveLevel_;
-                break;
-            }
-        }
-    }
-
-    void setLedMode(uint8_t channel, LedMode mode)
-    {
-        if (channel >= CHANNEL_COUNT)
-            return;
-
-        ledMode_[channel] = mode;
-        ledPhaseStart_[channel] = millis();
-        ledOn_[channel] = true; // any blink sequence starts in its "on" phase
-    }
-
-    LedMode getLedMode(uint8_t channel) const
-    {
-        if (channel >= CHANNEL_COUNT)
-            return LedMode::Deactive;
-        return ledMode_[channel];
-    }
-
-    void setAllLedMode(LedMode mode)
-    {
-        for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
-            setLedMode(i, mode);
-    }
+    void setAllLedMode(LedMode mode);
 
     // Call once a Blinking action has actually finished; LED returns to Deactive.
-    void finishOperation(uint8_t channel)
-    {
-        setLedMode(channel, LedMode::Deactive);
-    }
+    void finishOperation(uint8_t channel);
 
     // Tunable brightness levels, range 0..LED_PWM_LEVELS-1 (0-31). blinkLevel
     // is used for the "on" phase of Blink/Blinking. Values are clamped.
-    void setLedLevels(uint8_t activeLevel, uint8_t deactiveLevel, uint8_t blinkLevel = LED_PWM_LEVELS - 1)
-    {
-        constexpr uint8_t kMax = LED_PWM_LEVELS - 1;
-        ledActiveLevel_ = (activeLevel > kMax) ? kMax : activeLevel;
-        ledDeactiveLevel_ = (deactiveLevel > kMax) ? kMax : deactiveLevel;
-        ledBlinkLevel_ = (blinkLevel > kMax) ? kMax : blinkLevel;
-    }
+    void setLedLevels(uint8_t activeLevel, uint8_t deactiveLevel, uint8_t blinkLevel = LED_PWM_LEVELS - 1);
 
-    void setLedBlinkTiming(uint16_t blinkMs, uint16_t blinkingPeriodMs)
-    {
-        ledBlinkMs_ = blinkMs;
-        ledBlinkingPeriodMs_ = blinkingPeriodMs;
-    }
+    void setLedBlinkTiming(uint16_t blinkMs, uint16_t blinkingPeriodMs);
 
     // Blocking — flashes every channel together for `duration` seconds, meant
     // for a "find/identify this device" command (e.g. Buspro DEVICE_FINDIT).
     // Restores each channel's previous LedMode once finished, so it doesn't
     // clobber whatever a channel was already doing (e.g. mid-Blinking).
-    void finditAnimation(uint8_t duration)
-    {
-        LedMode previousMode[CHANNEL_COUNT];
-        for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
-            previousMode[i] = ledMode_[i];
-
-        uint16_t prevBlinkMs = ledBlinkMs_;
-        uint16_t prevPeriodMs = ledBlinkingPeriodMs_;
-
-        constexpr uint16_t kIdentifyPeriodMs = 200; // fast on/off half-period, easy to spot
-        setLedBlinkTiming(prevBlinkMs, kIdentifyPeriodMs);
-        setAllLedMode(LedMode::Blinking);
-
-        uint32_t durationMs = static_cast<uint32_t>(duration) * 1000UL;
-        uint32_t start = millis();
-        while (millis() - start < durationMs)
-        {
-            updateLeds();
-        }
-
-        setLedBlinkTiming(prevBlinkMs, prevPeriodMs);
-
-        for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
-            setLedMode(i, previousMode[i]);
-    }
+    void finditAnimation(uint8_t duration);
 
     // Small blocking boot animation — call once, before handing control over
     // to updateLeds() in loop(). Uses delay(), so only call it from setup().
-    void startupAnimation()
-    {
-        // for (size_t i = 0; i < CHANNEL_COUNT; i++)
-        // {
-        //     setLedMode(i, LedMode::Active);
-        //     updateLeds();
-        //     delay(1000);
-        // }
-
-        sweep(0, 8);
-        sweep(8, 2);
-        sweep(2, 12);
-        sweep(12, 0);
-
-        sweep(0, 31);
-
-        for (int i = 0; i < 2; i++)
-        {
-            setLedLevels(16, 31, 31);
-            updateLeds();
-            delay(80);
-
-            setLedLevels(16, 18, 31);
-            updateLeds();
-            delay(60);
-        }
-
-        setLedLevels(16, 31, 31);
-        updateLeds();
-    }
+    void startupAnimation();
 
     // Blocking brightness ramp from `from` to `to` (0-31), applied to the
     // "deactive" level while active/blink stay fixed — used by startupAnimation().
-    void sweep(uint8_t from, uint8_t to)
-    {
-        const uint8_t maxLevel = 31;
-        int step = (from < to) ? 1 : -1;
-
-        for (int i = from;; i += step)
-        {
-            setLedLevels(16, i, maxLevel);
-            updateLeds();
-
-            delay(12 + abs(16 - i));
-
-            if (i == to)
-                break;
-        }
-    }
+    void sweep(uint8_t from, uint8_t to);
 
 private:
     uint8_t ledPins_[CHANNEL_COUNT];
@@ -265,41 +112,13 @@ private:
     // Sets up the software-PWM tick. On STM32 this uses TIM3 running at
     // LED_PWM_FREQUENCY_HZ * LED_PWM_LEVELS. On other cores this is
     // currently a no-op — pwmTick() then acts as plain digital on/off.
-    void initPwmTimer()
-    {
-        pwmInstance_ = this;
-
-#if defined(ARDUINO_ARCH_STM32)
-        pwmTimer_ = new HardwareTimer(TIM4);
-        pwmTimer_->setOverflow(static_cast<uint32_t>(LED_PWM_FREQUENCY_HZ) * LED_PWM_LEVELS, HERTZ_FORMAT);
-        pwmTimer_->attachInterrupt(pwmIsrTrampoline);
-        pwmTimer_->resume();
-#endif
-    }
+    void initPwmTimer();
 
     // Timer callbacks must be free functions, so this static forwards to
     // the one active LedHandler instance's pwmTick().
-    static void pwmIsrTrampoline()
-    {
-        if (pwmInstance_)
-            pwmInstance_->pwmTick();
-    }
+    static void pwmIsrTrampoline();
 
     // Runs at LED_PWM_FREQUENCY_HZ * LED_PWM_LEVELS inside the timer ISR.
     // Keep this fast — no flash access, no long loops.
-    void pwmTick()
-    {
-        pwmCounter_++;
-        if (pwmCounter_ >= LED_PWM_LEVELS)
-            pwmCounter_ = 0;
-
-        for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
-        {
-            bool on = (ledLevel_[i] > pwmCounter_);
-            digitalWrite(ledPins_[i], activeHigh_ ? on : !on);
-        }
-    }
+    void pwmTick();
 };
-
-template <uint8_t CHANNEL_COUNT>
-LedHandler<CHANNEL_COUNT> *LedHandler<CHANNEL_COUNT>::pwmInstance_ = nullptr;
