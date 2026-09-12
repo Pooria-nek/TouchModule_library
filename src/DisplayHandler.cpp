@@ -24,12 +24,15 @@ void DisplayHandler::begin()
     u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
 }
 
-unsigned long previousMillis = 0;
-// update and handle time matter things on display
-void DisplayHandler::update(const HVACPanel &hvac)
+void DisplayHandler::updateresorce(const HVACPanel &hvac)
 {
     hvacPanel_ = &hvac;
+}
 
+unsigned long previousMillis = 0;
+// update and handle time matter things on display
+void DisplayHandler::update()
+{
     unsigned long now = millis();
 
     if (now - previousMillis >= 500)
@@ -199,7 +202,10 @@ void DisplayHandler::drawContent()
             break;
 
         case 4:
-            drawHvacPage();
+            if (hvacPanel_)
+            {
+                drawHvacPage(*hvacPanel_);
+            }
             break;
 
             // case 5:
@@ -436,12 +442,14 @@ void DisplayHandler::drawHvacSpeed(uint8_t y, uint8_t speed, bool autos)
 }
 
 #ifdef OLDIE
-void DisplayHandler::drawHvacPage()
+void DisplayHandler::drawHvacPage(const HVACPanel &hvac)
 {
     if (!hvacPanel_)
         return; // update(hvac) hasn't been called yet — nothing to draw
 
-    const HVACPanel::State &state = hvacPanel_->currentState();
+    const HVACPanel::State &state = hvac.currentState();
+
+    uint8_t currentHvac = hvac.currentHvac();
 
     // put mode icon in left and power in right
     u8g2.setDrawColor(1);
@@ -466,6 +474,15 @@ void DisplayHandler::drawHvacPage()
 
     // fan speed icon in left and text in right
     u8g2.drawHLine(0, 90, 64);
+
+    u8g2.setFont(u8g2_font_6x10_tf);
+    // Show selected HVAC
+    char buffer[8];
+    snprintf(buffer, sizeof(buffer), "AC %d", currentHvac + 1);
+    u8g2.drawStr(40, 100, buffer);
+
+    // Current HVAC image
+    u8g2.drawXBMP(0, 96, 64, 32, hvac.currentImage());
 
     // u8g2.drawStr(28, 71, speed_texts[0]);
 
@@ -787,8 +804,7 @@ void DisplayHandler::startupAnimation()
             {
                 u8g2.drawPixel(
                     x + xOffset,
-                    y + yOffset
-                );
+                    y + yOffset);
             }
         }
 
@@ -796,7 +812,7 @@ void DisplayHandler::startupAnimation()
         delay(15);
     }
 
-    delay(3000);
+    delay(500);
 
     u8g2.clearBuffer();
     u8g2.sendBuffer();

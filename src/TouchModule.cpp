@@ -21,6 +21,8 @@ TouchModule::TouchModule(
       ,
       apds_(wirePort)
 #endif
+      ,
+      hvac_(flash)
 {
     // mcu::copyMcuUID(uid_);
     for (uint8_t i = 0; i < TOUCH_PAD_COUNT; i++)
@@ -119,7 +121,8 @@ void TouchModule::update()
 
     // display_.setBrightness(apds_.getAutoBrightness());
 
-    display_.update(hvac_);
+    display_.updateresorce(hvac_);
+    display_.update();
 }
 
 void TouchModule::setKeyType(uint8_t key, ButtonType type)
@@ -134,7 +137,10 @@ TouchModule::ButtonType TouchModule::getKeyType(uint8_t key)
 {
     if (key >= LOGICAL_BUTTON_COUNT)
         return ButtonType::Invalid;
-    return keytype_[key - 1];
+    // NOTE: was keytype_[key - 1] — inconsistent with setKeyType()'s 0-based
+    // indexing, and for key == 0 the uint8_t underflow (0 - 1 == 255) read
+    // 255 elements past the array. Fixed to match setKeyType().
+    return keytype_[key];
 }
 
 void TouchModule::fetchValidPages()
@@ -177,24 +183,32 @@ void TouchModule::buttonUpdate()
 #ifdef HAS_OLED_DISPLAY
     // if (k < 8)
     // {
+    // const uint8_t physicalButton = getPhysicalButton(k);
+    // const uint8_t logicalButton = getLogicalButton(k);
+    // const ButtonType type = getKeyType(logicalButton);
 
-    //     char buf[32];
+    // char buf[32];
 
-    //     sprintf(buf, "%02d-%02d-%02d", logicalButton, physicalButton, static_cast<uint8_t>(type));
+    // sprintf(buf, "%02d-%02d-%02d", logicalButton, physicalButton, static_cast<uint8_t>(type));
 
-    //     display_.drawText(0, 16, buf);
+    // display_.drawText(0, 16, buf);
     // }
     // else
     if (isPressed(8))
     {
-        // buzzer_.click();
-        display_.changePage(false);
+        if (display_.changePage(false))
+        {
+            buzzer_.click();
+        }
+
         // continue;
     }
     else if (isPressed(9))
     {
-        // buzzer_.click();
-        display_.changePage(true);
+        if (display_.changePage(true))
+        {
+            buzzer_.click();
+        }
         // continue;
     }
 #endif
@@ -212,64 +226,47 @@ void TouchModule::buttonUpdate()
 
     case 4:
     {
-        //------------------------------------ mode ----------------------------------
-        if (isHold(1)
-            // && AcChangeMode(curent_ac)
-            ) //&& (evt_touch==2) )
+        if (isHold(0))
         {
-            // buzzer_call(50);
+            hvac_.nextMode();
+            buzzer_.click();
         }
 
-        // ------------------------------------ power -----------------------------
-        if (isPressed(2)
-            // && AcTogglePower(curent_ac)
-            ) // bnb
+        if (isHold(1))
         {
-            // buzzer_call(50);
+            hvac_.togglePower();
+            buzzer_.click();
         }
 
-        // --------------------------------- set point ----------------------------
-        if (isPressed(3)
-            // && AcSetpointChange(curent_ac, -1)
-        )
+        if (isPressed(2))
         {
-            // buzzer_call(50);
-        }
-        if (isPressed(4)
-            // && AcSetpointChange(curent_ac, 1)
-        )
-        {
-            // buzzer_call(50);
+            buzzer_.click();
+            hvac_.decreaseTemp(1.0f);
         }
 
-        //------------------------------- speed ---------------------------------------------
-        if (isPressed(5)
-            // && AcFanSpeed(curent_ac, -1)
-            ) // decrise
+        if (isPressed(3))
         {
-            // buzzer_call(50);
-        }
-        if (isPressed(6)
-            // && AcFanSpeed(curent_ac, 1)
-            ) // increse
-        {
-            // buzzer_call(50);
+            hvac_.increaseTemp(1.0f);
         }
 
-        //------------------------------------ ac ----------------------------------------------
-        if (isPressed(7)
-            // && AcNavigate(-1)
-            ) // change ac page
+        if (isPressed(4))
         {
-            hvac_.previous();
-            // buzzer_call(50);
+            hvac_.previousFan();
         }
-        if (isPressed(8)
-            // && AcNavigate(1)
-            ) // change ac page
+
+        if (isPressed(5))
         {
-            hvac_.next();
-            // buzzer_call(50);
+            hvac_.nextFan();
+        }
+
+        if (isPressed(6))
+        {
+            hvac_.previousHvac();
+        }
+
+        if (isPressed(7))
+        {
+            hvac_.nextHvac();
         }
     }
     break;
@@ -342,9 +339,6 @@ void TouchModule::buttonUpdate()
     // // {
     // for (uint8_t k = 0; k < TOUCH_PAD_COUNT; k++)
     // {
-    //     const uint8_t physicalButton = getPhysicalButton(k);
-    //     const uint8_t logicalButton = getLogicalButton(k);
-    //     const ButtonType type = getKeyType(logicalButton);
 
     //     // Page navigation keys
     //     if (isPressed(k))
@@ -932,16 +926,16 @@ bool TouchModule::updateBS8112()
                 // stored high/low state, so skip the acknowledge flash below.
                 wake();
             }
-            else if (!keyHigh_[key] && leds_.getLedMode(key) != LedMode::Blinking)
-            {
-                buzzer_.click();
-                // Acknowledge the touch with a single flash — but only for
-                // channels currently "low". A channel already lit "high"
-                // doesn't need it, and this avoids Blink's auto-return-to-
-                // Deactive fighting with a channel that should stay high.
-                // Also skipped while mid-operation (Blinking).
-                leds_.setLedMode(key, LedMode::Blink);
-            }
+            // else if (!keyHigh_[key] && leds_.getLedMode(key) != LedMode::Blinking)
+            // {
+            //     // buzzer_.click();
+            //     // Acknowledge the touch with a single flash — but only for
+            //     // channels currently "low". A channel already lit "high"
+            //     // doesn't need it, and this avoids Blink's auto-return-to-
+            //     // Deactive fighting with a channel that should stay high.
+            //     // Also skipped while mid-operation (Blinking).
+            //     // leds_.setLedMode(key, LedMode::Blink);
+            // }
         }
     }
 
@@ -1521,7 +1515,7 @@ void TouchModule::handleReadPOpration3(const BusproFrame &frame)
     if (frame.payloadLen != 0)
         return;
 
-    uint8_t payload[9];
+    uint8_t payload[9] = {}; // stub — no backing state yet; zero rather than leak the stack
 
     sendResponse(BusproOp::Touch::OPRATION3.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1545,7 +1539,7 @@ void TouchModule::handleReadPOpration4(const BusproFrame &frame)
     if (frame.payloadLen != 0)
         return;
 
-    uint8_t payload[9];
+    uint8_t payload[9] = {}; // stub — no backing state yet; zero rather than leak the stack
 
     sendResponse(BusproOp::Touch::OPRATION4.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1564,7 +1558,7 @@ void TouchModule::handleReadPOpration5(const BusproFrame &frame)
     if (frame.payloadLen != 0)
         return;
 
-    uint8_t payload[9];
+    uint8_t payload[9] = {}; // stub — no backing state yet; zero rather than leak the stack
 
     sendResponse(BusproOp::Touch::SLEEPING.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1590,7 +1584,7 @@ void TouchModule::handleReadTimeDate(const BusproFrame &frame)
     if (frame.payloadLen != 0)
         return;
 
-    uint8_t payload[9];
+    uint8_t payload[9] = {}; // stub — no backing state yet; zero rather than leak the stack
 
     sendResponse(BusproOp::Touch::TYPE_TIMEDATE.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1764,19 +1758,22 @@ void TouchModule::handleModifyTouchRemark(const BusproFrame &frame)
 }
 
 ////////////////////////////////////// AC ///////////////////////////////////////
-uint8_t hvacnumber;
+static uint8_t hvacnumber = 0; // was a plain global (external linkage) — could
+                               // collide with another same-named global at
+                               // link time. Tracks which AC index the last
+                               // AC_INFORMATION write referred to.
 void TouchModule::handleReadAcInfo(const BusproFrame &frame)
 {
     if (frame.payloadLen != 0)
         return;
 
     uint8_t enable = 1;
-    uint8_t subnetid;
-    uint8_t deviceid;
-    uint8_t adjust;
+    uint8_t subnetid = 0;
+    uint8_t deviceid = 0;
+    uint8_t adjust = 0;
     //
     uint8_t type = 1; //
-    uint8_t state;
+    uint8_t state = 0;
 
     uint8_t payload[9] = {BusproOp::SUCCESS, enable, subnetid, deviceid, adjust, hvacnumber, type, 0, state};
 
@@ -1913,15 +1910,7 @@ void TouchModule::handleReadImage(const BusproFrame &frame)
 
     uint8_t flashData[16];
 
-    if (packetNumber <= 60)
-    {
-        flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_IMAGES, MemoryAdress::Touch::pageImage(imageNumber, packetNumber)), flashData, sizeof(flashData));
-    }
-    else
-    {
-        // Invalid request -> return empty/unused data
-        memset(flashData, 0xFF, sizeof(flashData));
-    }
+    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_IMAGES, MemoryAdress::Touch::pageImage(imageNumber, packetNumber)), flashData, sizeof(flashData));
 
     // Padding
     payload[2] = 0xFF;
@@ -1958,7 +1947,34 @@ void TouchModule::handleModifyImage(const BusproFrame &frame)
     // Second 8 useful bytes
     memcpy(flashData + 8, frame.payload + 13, 8);
 
-    flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_IMAGES, MemoryAdress::Touch::pageImage(imageNumber, packetNumber)), flashData, sizeof(flashData));
+    if (configMode == 0)
+    {
+        flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_IMAGES, MemoryAdress::Touch::pageImage(imageNumber, packetNumber)), flashData, sizeof(flashData));
+    }
+    else if (configMode == 1)
+    {
+        // 4 HVAC images per page
+        uint8_t hvacIndex =
+            imageNumber * 4 + (packetNumber / 16);
+
+        // Packet inside the selected 256-byte image
+        uint8_t imagePacket =
+            packetNumber % 16;
+
+        // Safety check
+        if (hvacIndex >= 8 || packetNumber >= 64)
+            return;
+
+        uint32_t address =
+            MemoryAdress::Touch::HVAC_IMAGE[hvacIndex] + (imagePacket * 16);
+
+        flash_.update(
+            flash_.findAdrress(
+                MemoryAdress::Touch::SECTOR_HVAC,
+                address),
+            flashData,
+            sizeof(flashData));
+    }
 
     uint8_t payload[3] = {BusproOp::SUCCESS, imageNumber, packetNumber};
 
@@ -2301,7 +2317,8 @@ void TouchModule::handleReadDeviceRemark(const BusproFrame &frame)
     if (frame.payloadLen != 0)
         return;
 
-    uint8_t payload[20];
+    uint8_t payload[20] = {}; // zeroed so the CONF= branch below (snprintf, which
+                              // won't fill all 20 bytes) doesn't leak the stack
 
     if (configMode == 0)
     {
