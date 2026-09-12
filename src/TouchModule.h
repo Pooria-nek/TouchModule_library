@@ -14,6 +14,7 @@
 #include "DisplayHandler.h"
 #include "BuzzerHandler.h"
 #include "APDSHandler.h"
+#include "HVACPanel.h"
 
 #define TOUCH_HOLD_TIME 1000     // ms hold time
 #define TOUCH_HOLD_REPEAT 600    // ms between repeats after hold
@@ -378,6 +379,10 @@ public:
 #ifdef HAS_APDS
     APDSHandler getProx() const { return apds_; }
 #endif
+#ifdef DLP_PANEL
+    HVACPanel &hvac() { return hvac_; }
+    const HVACPanel &hvac() const { return hvac_; }
+#endif
 private:
     // void applyTouchHardware(uint8_t channel);
     // void readMcuUID();
@@ -458,38 +463,11 @@ private:
 #endif
 
 #ifdef DLP_PANEL
-    // hvac
-
-    bool hvacPower[8] = {
-        false, false, false, false,
-        false, false, false, false};
-
-    float hvacCurrentTemp[8] = {24.0, 24.0, 24.0, 24.0, 24.0, 24.0, 24.0, 24.0};
-
-    float hvacSetTemp[8] = {
-        24.0, 24.0, 24.0, 24.0,
-        24.0, 24.0, 24.0, 24.0};
-
-    bool hvacValidMode[8][4] = {
-        {false, false, false, false},
-        {false, false, false, false},
-        {false, false, false, false},
-        {false, false, false, false},
-        {false, false, false, false},
-        {false, false, false, false},
-        {false, false, false, false},
-        {false, false, false, false},
-    };
-
-    uint8_t hvacMode[8] = {
-        0, 0, 0, 0,
-        0, 0, 0, 0};
-
-    uint8_t hvacFan[8] = {
-        0, 0, 0, 0,
-        0, 0, 0, 0};
-
-    uint8_t currentHvac = 0;
+    // hvac — single source of truth for all 8 HVAC zones (power, temps,
+    // mode, fan, current-zone selection). See HVACPanel.h. Also owned by
+    // reference inside DisplayHandler (via update()) so the OLED can render
+    // whatever this holds without keeping its own copy.
+    HVACPanel hvac_;
 
     // floorheat
 

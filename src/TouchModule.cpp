@@ -119,7 +119,7 @@ void TouchModule::update()
 
     // display_.setBrightness(apds_.getAutoBrightness());
 
-    display_.update();
+    display_.update(hvac_);
 }
 
 void TouchModule::setKeyType(uint8_t key, ButtonType type)
@@ -261,14 +261,14 @@ void TouchModule::buttonUpdate()
             // && AcNavigate(-1)
             ) // change ac page
         {
-            display_.changeHvac(false);
+            hvac_.previous();
             // buzzer_call(50);
         }
         if (isPressed(8)
             // && AcNavigate(1)
             ) // change ac page
         {
-            display_.changeHvac(true);
+            hvac_.next();
             // buzzer_call(50);
         }
     }

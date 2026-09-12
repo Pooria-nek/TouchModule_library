@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <U8g2lib.h>
+#include "HVACPanel.h"
 
 #define OLDIE
 // #define MODERN
@@ -88,7 +89,9 @@ public:
     DisplayHandler(uint8_t cs, uint8_t dc, uint8_t reset);
 
     void begin();
-    void update();
+    // hvac is a non-owning reference to TouchModule's single HVACPanel
+    // instance — DisplayHandler no longer keeps its own copy of HVAC state.
+    void update(const HVACPanel &hvac);
     void drawScreen();  // draw screen clear -> put content,footer,... -> send buffer
     void drawContent(); // draw content of screen page things
     void drawFooter();  // draw footer page numbers
@@ -105,7 +108,6 @@ public:
     uint8_t getPage() const { return currentPage; }
 
     bool changePage(bool forward);
-    void changeHvac(bool forward);
 
     void drawText(int8_t x, int8_t y, const char *text);
     void drawCenteredText(const char *text);
@@ -189,29 +191,11 @@ private:
     // bool _waitforboot = false;
     // bool _loading = false;
 
-    // hvac
-
-    bool hvacPower[8] = {
-        false, false, false, false,
-        false, false, false, false};
-
-    float hvacCurrentTemp[8] = {
-        24.0, 24.0, 24.0, 24.0,
-        24.0, 24.0, 24.0, 24.0};
-
-    float hvacSetTemp[8] = {
-        24.0, 24.0, 24.0, 24.0,
-        24.0, 24.0, 24.0, 24.0};
-
-    uint8_t hvacMode[8] = {
-        0, 0, 0, 0,
-        0, 0, 0, 0};
-
-    uint8_t hvacFan[8] = {
-        0, 0, 0, 0,
-        0, 0, 0, 0};
-
-    uint8_t currentHvac = 0;
+    // hvac — no longer stored here. DisplayHandler reads from the
+    // HVACPanel instance TouchModule owns; the pointer is refreshed on
+    // every update(const HVACPanel&) call (see below) and read by
+    // drawHvacPage(). Null until the first update() call.
+    const HVACPanel *hvacPanel_ = nullptr;
 
     // floorheat
 

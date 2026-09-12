@@ -33,6 +33,10 @@ public:
     void setCurrent(uint8_t index);
     uint8_t current() const;
 
+    // Wrap-around zone navigation (e.g. "prev/next AC" buttons on a panel).
+    void next();
+    void previous();
+
     State &currentState();
     const State &currentState() const;
 

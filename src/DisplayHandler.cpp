@@ -26,8 +26,10 @@ void DisplayHandler::begin()
 
 unsigned long previousMillis = 0;
 // update and handle time matter things on display
-void DisplayHandler::update()
+void DisplayHandler::update(const HVACPanel &hvac)
 {
+    hvacPanel_ = &hvac;
+
     unsigned long now = millis();
 
     if (now - previousMillis >= 500)
@@ -148,18 +150,6 @@ bool DisplayHandler::changePage(bool forward)
     }
 
     return false;
-}
-
-void DisplayHandler::changeHvac(bool forward)
-{
-    if (forward)
-    {
-        currentHvac = (currentHvac + 1) % 8;
-    }
-    else
-    {
-        currentHvac = (currentHvac == 0) ? 7 : currentHvac - 1;
-    }
 }
 
 void DisplayHandler::drawContent()
@@ -448,23 +438,31 @@ void DisplayHandler::drawHvacSpeed(uint8_t y, uint8_t speed, bool autos)
 #ifdef OLDIE
 void DisplayHandler::drawHvacPage()
 {
+    if (!hvacPanel_)
+        return; // update(hvac) hasn't been called yet — nothing to draw
+
+    const HVACPanel::State &state = hvacPanel_->currentState();
+
     // put mode icon in left and power in right
     u8g2.setDrawColor(1);
 
-    drawHvacMode(0, 0);
+    drawHvacMode(0, state.mode);
 
-    drawHvacPower(0, 1);
+    drawHvacPower(0, state.power ? 1 : 0);
 
     u8g2.drawVLine(33, 0, 30);
     u8g2.drawHLine(0, 30, 64);
 
-    drawHvacTemp(30, 10.5f, 36.8f);
+    // top = target (set) temp, bottom = live sensor (current) temp
+    drawHvacTemp(30, state.setTemp, state.currentTemp);
 
     // current and settemp here
     // up and down
     u8g2.drawHLine(0, 60, 64);
 
-    drawHvacSpeed(60, 2, 1);
+    // fan == 0 is "AUTO" (see hvac_speed[]); drawHvacSpeed already treats
+    // speed 0 as "no bars", so passing it straight through is correct.
+    drawHvacSpeed(60, state.fan, state.fan == 0);
 
     // fan speed icon in left and text in right
     u8g2.drawHLine(0, 90, 64);
@@ -482,6 +480,12 @@ void DisplayHandler::drawHvacPage()
 #ifdef MODERN
 void DisplayHandler::drawHvacPage()
 {
+    if (!hvacPanel_)
+        return; // update(hvac) hasn't been called yet — nothing to draw
+
+    const HVACPanel::State &state = hvacPanel_->currentState();
+    const uint8_t zoneIndex = hvacPanel_->current();
+
     constexpr uint8_t SCREEN_W = 64;
     constexpr uint8_t SCREEN_H = 120;
 
@@ -503,12 +507,12 @@ void DisplayHandler::drawHvacPage()
     u8g2.setFont(u8g2_font_synchronizer_nbp_tr);
 
     // AC name / number
-    String acName = "AC " + String(currentHvac + 1);
+    String acName = "AC " + String(zoneIndex + 1);
 
     drawCenteredTextH(8, acName.c_str());
 
     // Power status
-    if (hvacPower[currentHvac])
+    if (state.power)
     {
         u8g2.setDrawColor(1);
         u8g2.drawGlyph(3, 10, 235); // power icon
@@ -526,7 +530,7 @@ void DisplayHandler::drawHvacPage()
     // Current temperature
     u8g2.setFont(u8g2_font_helvB14_tr);
 
-    String currentTemp = String(hvacCurrentTemp[currentHvac], 1);
+    String currentTemp = String(state.currentTemp, 1);
     drawCenteredTextH(45, currentTemp.c_str());
 
     // Degree symbol
@@ -536,7 +540,7 @@ void DisplayHandler::drawHvacPage()
     // Set temperature
     u8g2.setFont(u8g2_font_helvB10_tr);
 
-    String setTemp = String(hvacSetTemp[currentHvac], 1);
+    String setTemp = String(state.setTemp, 1);
     drawCenteredTextH(67, setTemp.c_str());
 
     // ---------------------------------------------------------
@@ -547,7 +551,7 @@ void DisplayHandler::drawHvacPage()
 
     String mode;
 
-    switch (hvacMode[currentHvac])
+    switch (state.mode)
     {
     case 0:
         mode = "Cool";
@@ -565,10 +569,6 @@ void DisplayHandler::drawHvacPage()
         mode = "Fan";
         break;
 
-    case 4:
-        mode = "Auto";
-        break;
-
     default:
         mode = "---";
         break;
@@ -580,7 +580,7 @@ void DisplayHandler::drawHvacPage()
     // Fan speed
     // ---------------------------------------------------------
 
-    switch (hvacFan[currentHvac])
+    switch (state.fan)
     {
     case 0:
         drawCenteredTextH(104, "Auto");
@@ -607,7 +607,7 @@ void DisplayHandler::drawHvacPage()
     // Navigation arrows
     // ---------------------------------------------------------
 
-    drawChangePointer(y + 11);
+    drawChangePointer(104);
 
     // ---------------------------------------------------------
     // Reset draw color

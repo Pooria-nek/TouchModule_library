@@ -20,6 +20,16 @@ uint8_t HVACPanel::current() const
     return currentHvac_;
 }
 
+void HVACPanel::next()
+{
+    currentHvac_ = (currentHvac_ + 1) % HVAC_COUNT;
+}
+
+void HVACPanel::previous()
+{
+    currentHvac_ = (currentHvac_ == 0) ? HVAC_COUNT - 1 : currentHvac_ - 1;
+}
+
 HVACPanel::State &HVACPanel::currentState()
 {
     return hvac_[currentHvac_];
