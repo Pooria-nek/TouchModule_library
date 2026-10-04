@@ -76,6 +76,13 @@ static const BuzzerNote notifySeq[] = {
     {4200, 30, 0},
 };
 
+// Glass chime — bright ascending shimmer, faster/lighter than notifySeq
+static const BuzzerNote glassChimeSeq[] = {
+    {3500, 25, 15},
+    {5000, 25, 15},
+    {7000, 35, 0},
+};
+
 // Descending sad tone — for cancel/fail feedback
 static const BuzzerNote cancelSeq[] = {
     {2000, 40, 20},
@@ -99,12 +106,14 @@ public:
         pinMode(_pin, OUTPUT);
     }
 
-    // ---- tone()-based effects ---------------------------------------------
-    // tone() with a duration schedules and returns (non-blocking), so all of
-    // these are safe to call from loop() without stalling Bus.poll().
-    // CAVEAT: on cores without a tone queue, back-to-back tone() calls can
-    // cut the earlier tone short — verify on target hardware. If it cuts out,
-    // use playSequence() with the millis()-based sequencer below instead.
+    // ---- All effects go through the millis()-based sequencer below. -------
+    // Nothing here calls delay() or relies on back-to-back tone() calls, so
+    // every method returns immediately and is always safe to call from
+    // loop() without stalling Bus.poll() or anything else.
+    //
+    // Calling a new effect while one is already playing cleanly replaces it
+    // (see playSequence()) — it never hangs or blocks waiting for the old
+    // one to finish.
 
     void click()
     {
@@ -113,6 +122,7 @@ public:
 
     void glassChime()
     {
+        playSequence(glassChimeSeq, sizeof(glassChimeSeq) / sizeof(glassChimeSeq[0]));
     }
 
     void confirmBeep()
@@ -122,44 +132,77 @@ public:
 
     void success()
     {
-        tone(_pin, 1500, 40);
-        tone(_pin, 2200, 40);
-        tone(_pin, 3000, 80);
+        playSequence(successSeq, sizeof(successSeq) / sizeof(successSeq[0]));
     }
 
     void warning()
     {
-        tone(_pin, 1000, 60);
-        tone(_pin, 1000, 60);
+        playSequence(warningSeq, sizeof(warningSeq) / sizeof(warningSeq[0]));
     }
 
     void error()
     {
-        tone(_pin, 400, 50);
-        tone(_pin, 400, 50);
-        tone(_pin, 400, 50);
+        playSequence(errorSeq, sizeof(errorSeq) / sizeof(errorSeq[0]));
     }
 
     void startup()
     {
         playSequence(clickSeq, sizeof(clickSeq) / sizeof(clickSeq[0]));
-        // tone(_pin, 1200, 40);
-        // tone(_pin, 1800, 40);
-        // tone(_pin, 2600, 80);
+        // playSequence(startupSeq, sizeof(startupSeq) / sizeof(startupSeq[0]));
     }
 
-    void countBeeps(uint8_t count, uint16_t freq = 2000, uint16_t durationMs = 60)
+    void alarm()
     {
+        playSequence(alarmSeq, sizeof(alarmSeq) / sizeof(alarmSeq[0]));
+    }
+
+    void coin()
+    {
+        playSequence(coinSeq, sizeof(coinSeq) / sizeof(coinSeq[0]));
+    }
+
+    void laser()
+    {
+        playSequence(laserSeq, sizeof(laserSeq) / sizeof(laserSeq[0]));
+    }
+
+    void notify()
+    {
+        playSequence(notifySeq, sizeof(notifySeq) / sizeof(notifySeq[0]));
+    }
+
+    void cancel()
+    {
+        playSequence(cancelSeq, sizeof(cancelSeq) / sizeof(cancelSeq[0]));
+    }
+
+    void heartbeat()
+    {
+        playSequence(heartbeatSeq, sizeof(heartbeatSeq) / sizeof(heartbeatSeq[0]));
+    }
+
+    // count identical beeps, built on the fly into a small internal buffer
+    // and played through the same non-blocking sequencer. Capped at
+    // MAX_COUNT_BEEPS to keep the buffer static (no heap allocation).
+    void countBeeps(uint8_t count, uint16_t freq = 2000, uint16_t durationMs = 60, uint16_t gapMs = 40)
+    {
+        if (count == 0)
+            return;
+        if (count > MAX_COUNT_BEEPS)
+            count = MAX_COUNT_BEEPS;
+
         for (uint8_t i = 0; i < count; i++)
         {
-            tone(_pin, freq, durationMs);
+            bool isLast = (i == count - 1);
+            _countBeepsBuf[i] = {freq, durationMs, isLast ? (uint16_t)0 : gapMs};
         }
+        playSequence(_countBeepsBuf, count);
     }
 
     // ---- millis()-based sequencer -----------------------------------------
-    // Use this if tone() cuts notes short on your core. Call poll() from
-    // loop() every iteration; it advances through the note list on its own,
-    // never blocking.
+    // Call poll() from loop() every iteration; it advances through the note
+    // list on its own timing and never blocks. Starting a new sequence while
+    // one is active immediately replaces it — no waiting, no stalling.
     void playSequence(const Note *notes, uint8_t count)
     {
         if (count == 0)
@@ -196,6 +239,8 @@ public:
     bool isSeqPlaying() const { return _seqPlaying; }
 
 private:
+    static constexpr uint8_t MAX_COUNT_BEEPS = 16;
+
     uint8_t _pin;
 
     const Note *_seq = nullptr;
@@ -203,4 +248,6 @@ private:
     uint8_t _seqIndex = 0;
     uint32_t _seqLastMs = 0;
     bool _seqPlaying = false;
+
+    Note _countBeepsBuf[MAX_COUNT_BEEPS];
 };

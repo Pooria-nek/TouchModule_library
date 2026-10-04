@@ -15,6 +15,9 @@
 #include "BuzzerHandler.h"
 #include "APDSHandler.h"
 #include "HVACPanel.h"
+#include "SwitchPanel.h"
+
+#include "NTC.h"
 
 #define TOUCH_HOLD_TIME 1000     // ms hold time
 #define TOUCH_HOLD_REPEAT 600    // ms between repeats after hold
@@ -22,7 +25,6 @@
 
 #define DLP_PANEL
 
-#define HAS_OLED_DISPLAY
 #define HAS_BUZZER
 #define HAS_APDS
 
@@ -175,6 +177,8 @@ constexpr uint8_t LOGICAL_BUTTON_COUNT = 16;
 
 constexpr uint8_t PREVIOUS_PAGE_KEY = 8;
 constexpr uint8_t NEXT_PAGE_KEY = 9;
+
+#define HAS_OLED_DISPLAY
 #endif
 
 // OLED display pin definitions — only DLP_PANEL and AC_PANEL carry a display
@@ -202,57 +206,62 @@ public:
     //            finishOperation() once the underlying action actually completes
     using LedMode = LedHandler<TOUCH_PAD_COUNT>::LedMode;
 
-    enum class ButtonType : uint8_t
-    {
-        // merged | tap
-        SingleON = 0x02,    // 1 opration just turn on
-        SingleOFF = 0x03,   // 1 opration just turn off
-        SingleONOFF = 0x01, // 1 opration do both on/off
+    // enum class ButtonType : uint8_t
+    // {
+    //     // merged | tap
+    //     SingleON = 0x02,    // 1 opration just turn on
+    //     SingleOFF = 0x03,   // 1 opration just turn off
+    //     SingleONOFF = 0x01, // 1 opration do both on/off
 
-        // merged | tap
-        CombinationON = 0x04,    // 49 opration just turn on
-        CombinationOFF = 0x05,   // 49 opration just turn off
-        CombinationONOFF = 0x07, // 49 opration do both on/off
+    //     // merged | tap
+    //     CombinationON = 0x04,    // 49 opration just turn on
+    //     CombinationOFF = 0x05,   // 49 opration just turn off
+    //     CombinationONOFF = 0x07, // 49 opration do both on/off
 
-        // merged | tap/release
-        Momentary = 0x06, // 1 opration turn on for tap | 1 opration turn off for release
+    //     // merged | tap/release
+    //     Momentary = 0x06, // 1 opration turn on for tap | 1 opration turn off for release
 
-        // seprate | tap
-        DblclickSingle = 0x10,   // 1 opration on tap | 49 opration double on tap
-        DblclickCombined = 0x11, // 49 opration on tap | 49 opration double on tap
+    //     // seprate | tap
+    //     DblclickSingle = 0x10,   // 1 opration on tap | 49 opration double on tap
+    //     DblclickCombined = 0x11, // 49 opration on tap | 49 opration double on tap
 
-        // seprate | hold
-        ShortLongPress = 0x17, // 49 opration on press | 49 opration on hold trig
-        ShortLongJog = 0x16,   // 49 opration on press | 49 opration on jog trig (seprate left/right)
+    //     // seprate | hold
+    //     ShortLongPress = 0x17, // 49 opration on press | 49 opration on hold trig
+    //     ShortLongJog = 0x16,   // 49 opration on press | 49 opration on jog trig (seprate left/right)
 
-        Invalid = 0x00 // anything else it invalid
-    };
+    //     Invalid = 0x00 // anything else it invalid
+    // };
 
-    enum class ButtonOperationType : uint8_t
-    {
-        Scene = 0x55,                // param 1 -> Zone no | param 2 -> Scene no | param 3 -> --- | param 4 -> ---
-        Sequence = 0x56,             // param 1 -> Zone no | param 2 -> Sequence | param 3 -> --- | param 4 -> ---
-        TimerSwitch = 0x57,          // param 1 -> Switch no | param 2 -> Switch Statue | param 3 -> --- | param 4 -> ---
-        UniversalSwitch = 0x58,      // param 1 -> Switch no | param 2 -> Switch Statue | param 3 -> --- | param 4 -> ---
-        SingleChannelControl = 0x59, // param 1 -> Channel no | param 2 -> Intensity | param 3 -> Running time | param 4 -> ---
-        CurtainSwitch = 0x60,        // param 1 -> Curtain no | param 2 -> Switch Status | param 3 -> --- | param 4 -> ---
-        GPRSControl = 0x61,          // param 1 -> Message | param 2 -> no | param 3 -> --- | param 4 -> ---
-        PanelControl = 0x62,         // param 1 -> Function | param 2 -> par1 | param 3 -> par2 | param 4 -> ---
-        BroadcastScene = 0x63,       // param 1 -> All Zone | param 2 -> Scene no | param 3 -> --- | param 4 -> ---
-        BroadcastChannel = 0x64,     // param 1 -> All Channel | param 2 -> Channel no | param 3 -> Running time | param 4 -> ---
-        SecurityModule = 0x65,       // param 1 -> Zone no | param 2 -> Mode | param 3 -> --- | param 4 -> ---
-        MusicControl = 0x67,         // param 1 -> par1 | param 2 -> par2 | param 3 -> par3 | param 4 -> ---
-        UniversalControl = 0x68,     // param 1 -> par1 | param 2 -> par2 | param 3 -> --- | param 4 -> ---
-        InfraredControl = 0x69,      // param 1 -> par1 | param 2 -> par2 | param 3 -> par3 | param 4 -> ---
-        LogicLightAdjust = 0x70,     // param 1 -> Logic Light no | param 2 -> Intensity | param 3 -> color no | param 4 -> Duration[s]
-        Invalid = 0x00               // anything else it invalid
-    };
+    // enum class ButtonOperationType : uint8_t
+    // {
+    //     Scene = 0x55,                // param 1 -> Zone no | param 2 -> Scene no | param 3 -> --- | param 4 -> ---
+    //     Sequence = 0x56,             // param 1 -> Zone no | param 2 -> Sequence | param 3 -> --- | param 4 -> ---
+    //     TimerSwitch = 0x57,          // param 1 -> Switch no | param 2 -> Switch Statue | param 3 -> --- | param 4 -> ---
+    //     UniversalSwitch = 0x58,      // param 1 -> Switch no | param 2 -> Switch Statue | param 3 -> --- | param 4 -> ---
+    //     SingleChannelControl = 0x59, // param 1 -> Channel no | param 2 -> Intensity | param 3 -> Running time | param 4 -> ---
+    //     CurtainSwitch = 0x60,        // param 1 -> Curtain no | param 2 -> Switch Status | param 3 -> --- | param 4 -> ---
+    //     GPRSControl = 0x61,          // param 1 -> Message | param 2 -> no | param 3 -> --- | param 4 -> ---
+    //     PanelControl = 0x62,         // param 1 -> Function | param 2 -> par1 | param 3 -> par2 | param 4 -> ---
+    //     BroadcastScene = 0x63,       // param 1 -> All Zone | param 2 -> Scene no | param 3 -> --- | param 4 -> ---
+    //     BroadcastChannel = 0x64,     // param 1 -> All Channel | param 2 -> Channel no | param 3 -> Running time | param 4 -> ---
+    //     SecurityModule = 0x65,       // param 1 -> Zone no | param 2 -> Mode | param 3 -> --- | param 4 -> ---
+    //     MusicControl = 0x67,         // param 1 -> par1 | param 2 -> par2 | param 3 -> par3 | param 4 -> ---
+    //     UniversalControl = 0x68,     // param 1 -> par1 | param 2 -> par2 | param 3 -> --- | param 4 -> ---
+    //     InfraredControl = 0x69,      // param 1 -> par1 | param 2 -> par2 | param 3 -> par3 | param 4 -> ---
+    //     LogicLightAdjust = 0x70,     // param 1 -> Logic Light no | param 2 -> Intensity | param 3 -> color no | param 4 -> Duration[s]
+    //     Invalid = 0x00               // anything else it invalid
+    // };
 
     TouchModule(TwoWire &wirePort, BusproTransport &bus, MemoryCore &flash, uint32_t sectorAddress, const uint8_t touchPins[TOUCH_PAD_COUNT], const uint8_t touchPads[TOUCH_PAD_COUNT], bool activeHigh = true);
+
+    NTC ntc1;
+    NTC ntc2;
 
     bool begin();
 
     void update();
+
+    void error(const char *text);
 
     // uint8_t getLogicalButton(uint8_t key);
     void buttonUpdate();
@@ -260,8 +269,9 @@ public:
     bool firstime();
 
     bool init();
+    bool reMatch();
 
-    uint8_t maxZone();
+    // uint8_t maxZone();
     bool syncValues();
     bool syncProxValues();
 
@@ -297,22 +307,28 @@ public:
 
     void irqTouchHandler(); // Should be called by external GPIO interrupt service routine
 
-    void setKeyType(uint8_t key, ButtonType type);
-    ButtonType getKeyType(uint8_t key);
+    bool getIrq();
+
+    // void setKeyType(uint8_t key, ButtonType type);
+    // ButtonType getKeyType(uint8_t key);
 
     void fetchValidPages();
 
+    void fetchSleepValues();
+
     void fetchProxValues();
 
-    void fetchKeyType();
-    void pullKeyType();
+    // void fetchKeyType();
+    // void pullKeyType();
 
     // State query methods
     bool isPressed(uint8_t key);  // Returns true only on the initial press (edge)
     bool isReleased(uint8_t key); // Returns true only on the release (edge)
     bool isHold(uint8_t key);     // Returns true as long as the key is held down
     bool isHoldEdge(uint8_t key); // Returns true when held past TOUCH_HOLD_TIME
-    // bool isDoubleTap(uint8_t key); // Returns true only on the two tap (edge)
+                                  // bool isDoubleTap(uint8_t key); // Returns true only on the two tap (edge)
+
+    uint16_t pressedKey();
 
     uint16_t getTouchState() const { return _touchState; }
 
@@ -355,15 +371,6 @@ public:
     void wake();  // enter Wake mode: each channel restores its stored high/low state
     DeviceMode getDeviceMode() const { return deviceMode_; }
 
-    // Sets a channel's logical Wake-mode state: high = lit ("on"), low = off/dim.
-    // Remembered even while asleep, and applied immediately on the next wake().
-    void setKeyHigh(uint8_t channel, bool high);
-    bool isKeyHigh(uint8_t channel) const;
-
-    // Tunable brightness levels (0..LED_PWM_LEVELS-1, 0-31) for Sleep/Wake.
-    void setSleepLevel(uint8_t level);
-    void setWakeLevels(uint8_t highLevel, uint8_t lowLevel);
-
     // Auto-sleep: if no touch/activity for this many ms while Wake, sleep()
     // is entered automatically (checked from update()). Default 30000 (30s).
     void setSleepTimeout(uint32_t ms) { sleepTimeoutMs_ = ms; }
@@ -384,20 +391,22 @@ public:
     const HVACPanel &hvac() const { return hvac_; }
 #endif
 private:
+    static constexpr const char *SOFTWARE_VERSION = "v0.20.0-beta";
+
     // void applyTouchHardware(uint8_t channel);
     // void readMcuUID();
 
     uint8_t configMode = 0;
 
-    bool runSingle(uint8_t state, uint8_t button);
+    // bool runSingle(uint8_t state, uint8_t button);
 
-    bool runCombination(uint8_t state, uint8_t button);
+    // bool runCombination(uint8_t state, uint8_t button);
 
-    bool runMomentary(bool press, uint8_t button);
+    // bool runMomentary(bool press, uint8_t button);
 
-    bool runDblclick(bool lefty, bool combination, uint8_t button);
+    // bool runDblclick(bool lefty, bool combination, uint8_t button);
 
-    bool runSeprateHold(bool lefty, bool combination, uint8_t button);
+    // bool runSeprateHold(bool lefty, bool combination, uint8_t button);
 
     uint32_t memoryaddress_; // its the refrens address of data on memoryflash
 
@@ -414,11 +423,15 @@ private:
     // bool touchState_[TOUCH_PAD_COUNT] = {false};
     bool activeHigh_;
 
+    /////////////////////////////////////////////////////////////////////////
+
+    uint8_t ledState[LOGICAL_BUTTON_COUNT * 2] = {0};
+
     bool touchEnable_[LOGICAL_BUTTON_COUNT] = {false};
     uint8_t touchDelay_[LOGICAL_BUTTON_COUNT] = {0};
     uint8_t touchProtect_[LOGICAL_BUTTON_COUNT] = {0};
 
-    ButtonType keytype_[LOGICAL_BUTTON_COUNT] = {ButtonType::Invalid};
+    // ButtonType keytype_[LOGICAL_BUTTON_COUNT] = {ButtonType::Invalid};
 
     // BS811x values
     TwoWire &wire_;
@@ -443,6 +456,8 @@ private:
     // uint16_t convert(uint16_t touchState); // Re-maps raw sensor bits to custom layout
     void writeRegister(uint8_t reg, uint8_t value);
     uint8_t readRegister(uint8_t reg);
+
+    /////////////////////////////////////////////////////////////////////////
 
     // --- LED indicator (state machine + software PWM), see LedHandler.h ---
     LedHandler<TOUCH_PAD_COUNT> leds_;
@@ -486,6 +501,34 @@ private:
     uint8_t currentFheat = 0;
 #endif
 
+    SwitchPanel switchPanel_;
+
+    void updatePageLeds(uint8_t page);
+    void ledRunner(uint8_t page, uint16_t key);
+
+    struct FunctionRunnerState
+    {
+        bool active = false;
+        bool functionExecuting = false;
+
+        uint8_t page = 0;
+        uint16_t key = 0;
+
+        uint16_t logicalButton = 0;
+        uint16_t physicalButton = 0;
+
+        uint8_t ledChannel = 0;
+
+        uint8_t functionIndex = 0;
+        uint8_t functionEnd = 0;
+
+        uint8_t functionsPerUpdate = 3;
+    };
+    FunctionRunnerState functionRunnerState_;
+
+    void functionRunner(uint8_t page, uint16_t key);
+    void updateFunctionRunner();
+
     // --- Device mode (Sleep/Wake) ---
     DeviceMode deviceMode_ = DeviceMode::Wake;
     bool keyHigh_[TOUCH_PAD_COUNT] = {false}; // per-channel high(on)/low(off) state, remembered across sleep
@@ -511,6 +554,9 @@ private:
 
     void handlePanelControl(const BusproFrame &frame);
 
+    void handleRestore(const BusproFrame &frame);
+    void handleRestoreUNK(const BusproFrame &frame);
+
     /////////////////////////////////// SETTINGS ////////////////////////////////////
 
     void handleReadIndensity(const BusproFrame &frame);
@@ -525,11 +571,11 @@ private:
     void handleReadPOpration2(const BusproFrame &frame);
     void handleModifyPOpration2(const BusproFrame &frame);
 
-    void handleReadPOpration3(const BusproFrame &frame);
-    void handleModifyPOpration3(const BusproFrame &frame);
+    void handleReadPtempcalibr(const BusproFrame &frame);
+    void handleModifyPtempcalibr(const BusproFrame &frame);
 
-    void handleReadPOpration4(const BusproFrame &frame);
-    void handleModifyPOpration4(const BusproFrame &frame);
+    void handleReadPtempFlag(const BusproFrame &frame);
+    void handleModifyPtempFlag(const BusproFrame &frame);
 
     void handleReadPOpration5(const BusproFrame &frame);
     void handleModifyPOpration5(const BusproFrame &frame);
@@ -570,7 +616,25 @@ private:
     void handleReadACTemperature(const BusproFrame &frame);
     void handleModifyAcTemperature(const BusproFrame &frame);
 
+    void handleReadHvacTempSensor(const BusproFrame &frame);
+    void handleModifyHvacTempSensor(const BusproFrame &frame);
+
+    void handleReadHvacEcomode(const BusproFrame &frame);
+    void handleModifyHvacEcomode(const BusproFrame &frame);
+
+    void handleReadHvacIRread(const BusproFrame &frame);
+    void handleModifyHvacIRread(const BusproFrame &frame);
+
+    void handleReadHvacIRcontrol(const BusproFrame &frame);
+    void handleModifyHvacIRcontrol(const BusproFrame &frame);
+
+    void handleReadHvacTest(const BusproFrame &frame);
+    void handleModifyHvacTest(const BusproFrame &frame);
+
     ///////////////////////////////// FLOOR HEATING /////////////////////////////////
+
+    void handleReadFHInfo(const BusproFrame &frame);
+    void handleModifyFHInfo(const BusproFrame &frame);
 
     //////////////////////////////////// MUSIC //////////////////////////////////////
 

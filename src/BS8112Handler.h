@@ -4,7 +4,7 @@
 // #include <Arduino.h>
 // #include <Wire.h>
 
-// #define I2C_ADDRESS 0x50 // i2c addresss of bs8112
+// #define BS8112_ADDRESS 0x50 // i2c addresss of bs8112
 
 // class BS8112Handler
 // {
@@ -18,18 +18,24 @@
 
 // private:
 //     TwoWire &wire_;
-//     volatile bool irqFlag_;
-//     volatile bool _runAgain;
+//     volatile bool irqFlag;
+//     volatile bool runAgain;
 
-//     // State tracking
-//     uint16_t _touchState;     // Bitmask of currently active keys
-//     uint16_t _prevTouchState; // Bitmask of keys in previous update cycle
-//     uint16_t _pressedEdge;    // Bits set only during the press transition
-//     uint16_t _releasedEdge;   // Bits set only during the release transition
+//     // Number of enabled touch pads: 1..12
+//     uint8_t touchPadCount;
 
-//     // Hold/Timing logic
-//     uint32_t _lastPressTime[TOUCH_CHANNEL_COUNT];
-//     uint16_t _holdActive;
+//     // Physical BS8112 pad mapping
+//     uint8_t touchPins_[12];
+
+//     // // State tracking
+//     uint16_t touchState; // Bitmask of currently active keys
+//     uint16_t prevTouchState; // Bitmask of keys in previous update cycle
+//     uint16_t pressedEdge;    // Bits set only during the press transition
+//     uint16_t releasedEdge;   // Bits set only during the release transition
+
+//     // // Hold/Timing logic
+//     // uint32_t _lastPressTime[TOUCH_CHANNEL_COUNT];
+//     // uint16_t _holdActive;
 // };
 
 // #endif

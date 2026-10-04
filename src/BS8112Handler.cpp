@@ -5,7 +5,10 @@
 //  */
 // BS8112Handler::BS8112Handler(TwoWire &wirePort)
 //     : wire_(wirePort),
-//       irqFlag_(false)
+//       irqFlag(false),
+//       runAgain(false),
+//       touchState(0),
+//       touchPadCount(0)
 // {
 // }
 
@@ -15,12 +18,12 @@
 
 // void BS8112Handler::irqTouchHandler()
 // {
-//     irqFlag_ = true;
+//     irqFlag = true;
 // }
 
 // void BS8112Handler::init()
 // {
-//     _touchState = 0;
+//     touchState = 0;
 
 //     // BS8112 Initialization
 //     uint8_t config[17];
@@ -51,7 +54,7 @@
 //         checksum += config[i];
 
 //     // Write configuration to hardware
-//     wire_.beginTransmission(I2C_ADDRESS);
+//     wire_.beginTransmission(BS8112_ADDRESS);
 //     wire_.write(0xB0); // Start register
 //     for (uint8_t i = 0; i < 17; i++)
 //         wire_.write(config[i]);
@@ -66,26 +69,26 @@
 //  */
 // bool BS8112Handler::update()
 // {
-//     if (!irqFlag_ && !_runAgain)
+//     if (!irqFlag && !runAgain)
 //         return false;
 
 //     // Manage IRQ flag for continuous polling if required
-//     if (irqFlag_)
+//     if (irqFlag)
 //     {
-//         irqFlag_ = false;
-//         _runAgain = true;
+//         irqFlag = false;
+//         runAgain_ = true;
 //     }
 //     else
 //     {
-//         _runAgain = false;
+//         runAgain_ = false;
 //     }
 
 //     // Read 2-byte touch status from the device
 //     uint16_t rawState = 0;
-//     wire_.beginTransmission(I2C_ADDRESS);
+//     wire_.beginTransmission(BS8112_ADDRESS);
 //     wire_.write(0x08);
 //     wire_.endTransmission(false);
-//     if (wire_.requestFrom(I2C_ADDRESS, (uint8_t)2) == 2)
+//     if (wire_.requestFrom(BS8112_ADDRESS, (uint8_t)2) == 2)
 //     {
 //         uint8_t low = wire_.read();
 //         uint8_t high = wire_.read();
@@ -95,32 +98,31 @@
 //     // Remap only the configured physical pads into a compact bitfield,
 //     // where bit i of newState corresponds to TOUCH_PADS[i] (not the raw hardware bit position).
 //     uint16_t newState = 0;
-//     for (uint8_t i = 0; i < TOUCH_CHANNEL_COUNT; i++)
+//     for (uint8_t i = 0; i < touchPadCount; i++)
 //     {
 //         if (rawState & (1 << (touchPins_[i] - 1)))
 //             newState |= (1 << i);
 //     }
 
-//     // Detect edge transitions
-//     bool changed = (newState != _touchState);
-//     _prevTouchState = _touchState;
-//     _touchState = newState;
-//     _pressedEdge = (~_prevTouchState) & _touchState;
-//     _releasedEdge = _prevTouchState & (~_touchState);
+//    // Detect edge transitions
+//     bool changed = (newState != touchState);
+//     prevTouchState = touchState;
+//     touchState = newState;
+//     pressedEdge = (~prevTouchState) & touchState;
+//     releasedEdge = prevTouchState & (~touchState);
 
 //     // Update timing for hold detection
 //     uint32_t now = millis();
 
-//     if (_pressedEdge != 0)
-//         // lastActivityTime_ = now; // any fresh press counts as activity
-//         // TODO should link to TouchModule and update last active time
+//     if (pressedEdge != 0)
+//         lastActivityTime = now; // any fresh press counts as activity
 
-//     for (uint8_t key = 0; key < TOUCH_CHANNEL_COUNT; key++)
+//     for (uint8_t key = 0; key < touchPadCount; key++)
 //     {
-//         if (_pressedEdge & (1 << key))
+//         if (pressedEdge & (1 << key))
 //         {
-//             _lastPressTime[key] = now;
-//             _holdActive &= ~(1 << key);
+//             lastPressTime[key] = now;
+//             holdActive &= ~(1 << key);
 
 //             if (deviceMode_ == DeviceMode::Sleep)
 //             {
@@ -128,15 +130,16 @@
 //                 // stored high/low state, so skip the acknowledge flash below.
 //                 wake();
 //             }
-//             else if (!keyHigh_[key] && leds_.getLedMode(key) != LedMode::Blinking)
-//             {
-//                 // Acknowledge the touch with a single flash — but only for
-//                 // channels currently "low". A channel already lit "high"
-//                 // doesn't need it, and this avoids Blink's auto-return-to-
-//                 // Deactive fighting with a channel that should stay high.
-//                 // Also skipped while mid-operation (Blinking).
-//                 leds_.setLedMode(key, LedMode::Blink);
-//             }
+//             // else if (!keyHigh_[key] && leds_.getLedMode(key) != LedMode::Blinking)
+//             // {
+//             //     // buzzer_.click();
+//             //     // Acknowledge the touch with a single flash — but only for
+//             //     // channels currently "low". A channel already lit "high"
+//             //     // doesn't need it, and this avoids Blink's auto-return-to-
+//             //     // Deactive fighting with a channel that should stay high.
+//             //     // Also skipped while mid-operation (Blinking).
+//             //     // leds_.setLedMode(key, LedMode::Blink);
+//             // }
 //         }
 //     }
 

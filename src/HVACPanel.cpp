@@ -16,13 +16,13 @@ HVACPanel::HVACPanel(MemoryCore &flash)
 
 void HVACPanel::load()
 {
-    loadValidHvac();
-    loadImages();
+    fetchHvacValid();
+    fetchImage();
 
     for (uint8_t i = 0; i < HVAC_COUNT; ++i)
     {
         if (hvac_[i].valid)
-            loadHvac(i);
+            fetchHvac(i);
     }
 
     currentHvac_ = 0;
@@ -37,25 +37,23 @@ void HVACPanel::load()
     }
 }
 
-void HVACPanel::loadValidHvac()
+void HVACPanel::fetchHvacValid(uint8_t index)
 {
-    uint8_t validMask = 0;
+    uint8_t valid = 0;
+    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::HVAC_ADDRESSES[index]), &valid, sizeof(valid));
 
-    flash_.read(
-        flash_.findAdrress(
-            MemoryAdress::Touch::SECTOR_INFO,
-            MemoryAdress::Touch::HVAC_VALID),
-        &validMask,
-        sizeof(validMask));
+    hvac_[index].valid = valid;
+}
 
-    for (uint8_t i = 0; i < HVAC_COUNT; ++i)
+void HVACPanel::fetchHvacValid()
+{
+    for (size_t i = 0; i < HVAC_COUNT; i++)
     {
-        hvac_[i].valid =
-            (validMask & (1 << i)) != 0;
+        fetchHvacValid(i);
     }
 }
 
-void HVACPanel::loadHvac(uint8_t index)
+void HVACPanel::fetchHvac(uint8_t index)
 {
     if (index >= HVAC_COUNT)
         return;
@@ -68,20 +66,18 @@ void HVACPanel::loadHvac(uint8_t index)
             MemoryAdress::Touch::HVAC_ADDRESSES[index]),
         reinterpret_cast<uint8_t *>(&data),
         sizeof(data));
-
-    fromFlash(index, data);
 }
 
-void HVACPanel::loadImages()
+void HVACPanel::fetchImage(uint8_t index)
+{
+    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_ICONS, MemoryAdress::Touch::HVAC_IMAGE[index]), images_[index], HVAC_IMAGE_SIZE);
+}
+
+void HVACPanel::fetchImage()
 {
     for (uint8_t i = 0; i < HVAC_COUNT; ++i)
     {
-        flash_.read(
-            flash_.findAdrress(
-                MemoryAdress::Touch::SECTOR_INFO,
-                MemoryAdress::Touch::HVAC_IMAGE[i]),
-            images_[i],
-            HVAC_IMAGE_SIZE);
+        fetchImage(i);
     }
 }
 
@@ -110,34 +106,26 @@ uint8_t HVACPanel::currentHvac() const
     return currentHvac_;
 }
 
-void HVACPanel::nextHvac()
+bool HVACPanel::changeHvac(bool forward)
 {
-    for (uint8_t offset = 1; offset <= HVAC_COUNT; ++offset)
-    {
-        uint8_t index =
-            (currentHvac_ + offset) % HVAC_COUNT;
+    const uint8_t oldHvac = currentHvac_;
+    uint8_t hvac = currentHvac_;
 
-        if (hvac_[index].valid)
+    for (uint8_t i = 1; i < HVAC_COUNT; ++i)
+    {
+        if (forward)
+            hvac = (hvac >= HVAC_COUNT - 1) ? 0 : hvac + 1;
+        else
+            hvac = (hvac == 0) ? HVAC_COUNT - 1 : hvac - 1;
+
+        if (hvac_[hvac].valid)
         {
-            currentHvac_ = index;
-            return;
+            currentHvac_ = hvac;
+            return currentHvac_ != oldHvac;
         }
     }
-}
 
-void HVACPanel::previousHvac()
-{
-    for (uint8_t offset = 1; offset <= HVAC_COUNT; ++offset)
-    {
-        uint8_t index =
-            (currentHvac_ + HVAC_COUNT - offset) % HVAC_COUNT;
-
-        if (hvac_[index].valid)
-        {
-            currentHvac_ = index;
-            return;
-        }
-    }
+    return false;
 }
 
 HVACPanel::State &HVACPanel::currentState()
@@ -169,27 +157,14 @@ void HVACPanel::setHvacValid(uint8_t index, bool valid)
     if (index >= HVAC_COUNT)
         return;
 
-    hvac_[index].valid = valid;
+    flash_.update(
+        flash_.findAdrress(
+            MemoryAdress::Touch::SECTOR_INFO,
+            MemoryAdress::Touch::HVAC_ADDRESSES[index]),
+        &valid,
+        sizeof(valid));
 
-    if (!valid && currentHvac_ == index)
-    {
-        for (uint8_t offset = 1; offset <= HVAC_COUNT; ++offset)
-        {
-            uint8_t next =
-                (index + offset) % HVAC_COUNT;
-
-            if (hvac_[next].valid)
-            {
-                currentHvac_ = next;
-                break;
-            }
-        }
-    }
-
-    if (valid && !hvac_[currentHvac_].valid)
-    {
-        currentHvac_ = index;
-    }
+    fetchHvacValid(index);
 }
 
 bool HVACPanel::isHvacValid(uint8_t index) const
@@ -198,19 +173,6 @@ bool HVACPanel::isHvacValid(uint8_t index) const
         return false;
 
     return hvac_[index].valid;
-}
-
-uint8_t HVACPanel::hvacValidMask() const
-{
-    uint8_t mask = 0;
-
-    for (uint8_t i = 0; i < HVAC_COUNT; ++i)
-    {
-        if (hvac_[i].valid)
-            mask |= (1 << i);
-    }
-
-    return mask;
 }
 
 // =================================================
@@ -389,39 +351,68 @@ uint8_t HVACPanel::fan() const
     return currentState().fan;
 }
 
-void HVACPanel::nextFan()
+bool HVACPanel::changeFan(bool forward)
 {
     State &state = currentState();
 
+    const uint8_t previousFan = state.fan;
+
     for (uint8_t offset = 1; offset <= FAN_COUNT; ++offset)
     {
-        uint8_t index =
-            (state.fan + offset) % FAN_COUNT;
+        uint8_t index;
+
+        if (forward)
+        {
+            index = (state.fan + offset) % FAN_COUNT;
+        }
+        else
+        {
+            index = (state.fan + FAN_COUNT - offset) % FAN_COUNT;
+        }
 
         if (state.validFan[index])
         {
             state.fan = index;
-            return;
+            return state.fan != previousFan;
         }
     }
+
+    return false;
 }
 
-void HVACPanel::previousFan()
-{
-    State &state = currentState();
+// void HVACPanel::nextFan()
+// {
+//     State &state = currentState();
 
-    for (uint8_t offset = 1; offset <= FAN_COUNT; ++offset)
-    {
-        uint8_t index =
-            (state.fan + FAN_COUNT - offset) % FAN_COUNT;
+//     for (uint8_t offset = 1; offset <= FAN_COUNT; ++offset)
+//     {
+//         uint8_t index =
+//             (state.fan + offset) % FAN_COUNT;
 
-        if (state.validFan[index])
-        {
-            state.fan = index;
-            return;
-        }
-    }
-}
+//         if (state.validFan[index])
+//         {
+//             state.fan = index;
+//             return;
+//         }
+//     }
+// }
+
+// void HVACPanel::previousFan()
+// {
+//     State &state = currentState();
+
+//     for (uint8_t offset = 1; offset <= FAN_COUNT; ++offset)
+//     {
+//         uint8_t index =
+//             (state.fan + FAN_COUNT - offset) % FAN_COUNT;
+
+//         if (state.validFan[index])
+//         {
+//             state.fan = index;
+//             return;
+//         }
+//     }
+// }
 
 void HVACPanel::setFanValid(uint8_t fan, bool valid)
 {
@@ -471,64 +462,4 @@ bool HVACPanel::isFanValid(uint8_t fan) const
         return false;
 
     return currentState().validFan[fan];
-}
-
-// =================================================
-// Flash conversion
-// =================================================
-
-HVACPanel::FlashHvac HVACPanel::toFlash(uint8_t index) const
-{
-    FlashHvac data{};
-
-    if (index >= HVAC_COUNT)
-        return data;
-
-    const State &state = hvac_[index];
-
-    data.power = state.power ? 1 : 0;
-    data.setTemp = state.setTemp;
-    data.mode = state.mode;
-    data.fan = state.fan;
-
-    for (uint8_t i = 0; i < MODE_COUNT; ++i)
-    {
-        if (state.validMode[i])
-            data.validModeMask |= (1 << i);
-    }
-
-    for (uint8_t i = 0; i < FAN_COUNT; ++i)
-    {
-        if (state.validFan[i])
-            data.validFanMask |= (1 << i);
-    }
-
-    return data;
-}
-
-void HVACPanel::fromFlash(
-    uint8_t index,
-    const FlashHvac &data)
-{
-    if (index >= HVAC_COUNT)
-        return;
-
-    State &state = hvac_[index];
-
-    state.power = data.power != 0;
-    state.setTemp = data.setTemp;
-    state.mode = data.mode;
-    state.fan = data.fan;
-
-    for (uint8_t i = 0; i < MODE_COUNT; ++i)
-    {
-        state.validMode[i] =
-            (data.validModeMask & (1 << i)) != 0;
-    }
-
-    for (uint8_t i = 0; i < FAN_COUNT; ++i)
-    {
-        state.validFan[i] =
-            (data.validFanMask & (1 << i)) != 0;
-    }
 }

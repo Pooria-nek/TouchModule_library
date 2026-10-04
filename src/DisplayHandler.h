@@ -4,9 +4,14 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
 #include "HVACPanel.h"
+#include "MemoryCore.h"
+
+#include "NTC.h"
 
 #define OLDIE
 // #define MODERN
+
+#define PAGE_COUNT 6
 
 // 16x16
 static unsigned char power_icon[] = {
@@ -86,12 +91,20 @@ static const char *fh_mode[] = {"Day", "Night", "Away", "Normal"};
 class DisplayHandler
 {
 public:
-    DisplayHandler(uint8_t cs, uint8_t dc, uint8_t reset);
+    explicit DisplayHandler(MemoryCore &flash, uint8_t cs, uint8_t dc, uint8_t reset);
 
     void begin();
     // hvac is a non-owning reference to TouchModule's single HVACPanel
     // instance — DisplayHandler no longer keeps its own copy of HVAC state.
-    void updateresorce(const HVACPanel &hvac);
+    void updateResource(const HVACPanel &hvac);
+
+    void updateOutTemprature(const NTC &ntc);
+    void updateInTemprature(const NTC &ntc);
+
+    float outTemp;
+    float inTemp;
+
+    // void drawTemperature(const NTC& ntc,uint8_t x,uint8_t y);
 
     void update();
     void drawScreen();  // draw screen clear -> put content,footer,... -> send buffer
@@ -101,88 +114,80 @@ public:
     void clear();
     void send();
 
-    // void setJumpToPage(uint8_t time, uint8_t destination); //
-
-    // void setValidPages(bool page1, bool page2, bool page3, bool page4, bool page5, bool page6, bool page7); // this just set witch pages should show
-    void gotoPage(uint8_t pageNum);
-    // void prevPage(); // goes to next page
-    // void nextPage(); // goes to previos page
     uint8_t getPage() const { return currentPage; }
 
     bool changePage(bool forward);
 
-    void drawText(int8_t x, int8_t y, const char *text);
+    // void drawText(int8_t x, int8_t y, const char *text);
     void drawCenteredText(const char *text);
     void drawCenteredTextH(int8_t y, const char *text);
-    void drawCenteredTextV(int8_t x, const char *text);
+    // void drawCenteredTextV(int8_t x, const char *text);
 
-    void setFont(const uint8_t *font);
+    // void setFont(const uint8_t *font);
 
     U8G2_SSD1325_NHD_128X64_F_4W_HW_SPI &getU8g2();
 
-    // Blocking — call once from setup(), after begin(), before update() takes over.
-    void startupAnimation();
+    // animation drawers
 
-    // Blocking — flashes "HERE" on screen for durationSeconds so the unit can be
-    // visually located. Pair with LedHandler::finditAnimation() for combined effect.
-    void finditAnimation(uint8_t durationSeconds);
+    void startupAnimation();                       // Blocking — call once from setup(), after begin(), before update() takes over.
+    void finditAnimation(uint8_t durationSeconds); // Blocking — flashes "HERE" on screen for durationSeconds so the unit can be
 
-    static constexpr uint8_t CHUNK_COUNT = 5;
-    static constexpr uint8_t CHUNK_Y[CHUNK_COUNT] = {0, 30, 60, 90, 120};
-    static constexpr uint8_t CHUNK_HEIGHT[CHUNK_COUNT] = {30, 30, 30, 30, 8};
-
-    void drawImage(const uint8_t *image);
-    void drawChunk(uint8_t chunk, const uint8_t *buffer);
-    uint16_t getChunkSize(uint8_t chunk);
-    // uint16_t getChunkHight(uint8_t chunk);
+    void drawImage(const uint8_t image);
+    void drawChunk(uint8_t chunk, const uint8_t image);
 
     void setBrightness(uint8_t brightness);
 
-    void setReturnPage(uint page);
-    void setReturnPage(uint page, uint8_t delay);
-
     void setValidPages(const uint8_t *pages);
-    void setPageValid(uint8_t page, bool valid);
     bool isPageValid(uint8_t page) const;
     const uint8_t *getValidPages() const;
 
+    void sleep();
+    void wake();
+
+    void setEcoMode(bool enabled);
+
+    // void setSleepTime(uint8_t brightness);  // sleep time 10 to 99 -> 100 = always on
+    // void setSleeplevel(uint8_t brightness); // sleep level
+    void setReturnPage(uint8_t page);       // page number (0 = return off)
+
 private:
+    MemoryCore &flash_;
+
     //-----------------------------------------------------------
     // SOFTWARE VALUES
     //-----------------------------------------------------------
-    const uint8_t PAGE_COUNT = 7; // it usses for in function calculations
 
     // return to page values
-    uint8_t returnDestination = 1; // 1 to 7 -> 0 mean no return
+    uint8_t returnDestination = 0; // 1 to 7 -> 0 mean no return
     uint8_t returnDelay = 20;      // 20 to 150 sec
 
-    // indicator intensity
-    uint8_t lcdbrightness = 50; // 0 to 100 persent
     // uint8_t _buttonBrightness = 50; // 0 to 100 persent
-    bool ecoMode = false; // false -> always on | true -> eco mode
-    // if was eco :
-    uint8_t _ecoModeDelay = 10;      // 10 to 99 sec
-    uint8_t _ecoModeBrightness = 10; // 0 to 100 persent
-    bool _triggerLcdWake = false;    // UNKNOWN
 
     //-----------------------------------------------------------
     //-----------------------------------------------------------
 
     U8G2_SSD1325_NHD_128X64_F_4W_HW_SPI u8g2;
 
-    uint8_t currentPage = 0;
-    uint8_t previosPage = 7;
+    uint8_t currentPage = 1;
+    // uint8_t previosPage = 7;
 
-    bool sleep = false;
+    bool _sleeping = false;
 
-    uint8_t validPages[7] = {
-        1, // switch page 1
-        0, // switch page 2
-        0, // switch page 3
-        0, // switch page 4
-        0, // hvac page
-        0, // heating page
-        0  // music page
+    bool ecoMode = false;            // false -> always on | true -> eco mode
+    uint8_t _ecoModeDelay = 10;      // 10 to 99 sec
+    uint8_t _ecoModeBrightness = 10; // 0 to 100 persent
+    bool _triggerLcdWake = false;    // UNKNOWN
+
+    uint8_t lcdbrightness = 50; // indicator intensity
+
+    uint8_t validPages[PAGE_COUNT] = {
+        1 // switch page 1
+        // 0, // switch page 2
+        // 0, // switch page 3
+        // 0, // switch page 4
+        // 0, // hvac page
+        // 0  // heating page
+        // 0  // music page
     };
 
     // bool _systemControl = false; //
@@ -199,30 +204,29 @@ private:
 
     // floorheat
 
-    bool fheatPower[8] = {
+    bool fheatPower[4] = {
         false, false, false, false};
 
-    float fheatCurrentTemp[8] = {
+    float fheatCurrentTemp[4] = {
         24.0, 24.0, 24.0, 24.0};
 
-    float fheatSetTemp[8] = {
+    float fheatSetTemp[4] = {
         24.0, 24.0, 24.0, 24.0};
 
-    uint8_t fheatMode[8] = {
+    uint8_t fheatMode[4] = {
         0, 0, 0, 0};
 
     uint8_t currentFheat = 0;
 
     ///////////////////////////////////////////////////////////////////
 
-    void drawImage(uint8_t page_number, uint8_t index, uint8_t y_offset);
-    void drawSwitchBtn(int8_t x, int8_t y, uint8_t state);
+    // void drawImage(uint8_t page_number, uint8_t index, uint8_t y_offset);
+    // void drawSwitchBtn(int8_t y);
 
-    void drawBootupPage();
-    void drawLoadingPage();
-    void drawSettingPage();
+    // void drawBootupPage();
+    // void drawLoadingPage();
+    // void drawSettingPage();
 
-    void drawScreenoff();
     void drawScreensaver();
 
     void drawChangePointer(uint8_t y);
@@ -231,7 +235,7 @@ private:
 
     void drawHvacPage(const HVACPanel &hvac);
     void drawFloorheatPage();
-    void drawMusicPage();
+    // void drawMusicPage();
 
     void drawHvacMode(uint8_t y, uint8_t mode);
     void drawHvacPower(uint8_t y, uint8_t power);

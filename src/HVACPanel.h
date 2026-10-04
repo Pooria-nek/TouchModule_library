@@ -13,6 +13,9 @@ public:
     struct State
     {
         bool valid = true;
+        // uint16_t deviceAddress = 0;
+        uint8_t deviceSn = 0;
+        uint8_t deviceId = 0;
 
         bool power = false;
 
@@ -21,9 +24,15 @@ public:
 
         uint8_t mode = 0;
         uint8_t fan = 0;
+        uint8_t autofan = 0;
 
         bool validMode[MODE_COUNT] = {true, true, true, true};
         bool validFan[FAN_COUNT] = {true, true, true, true};
+
+        uint8_t rangeCool[2] = {15, 30};
+        uint8_t rangeHeat[2] = {15, 30};
+        uint8_t rangeAuto[2] = {15, 30};
+        uint8_t rangeDehum[2] = {15, 30};
     };
 
     struct FlashHvac
@@ -36,7 +45,6 @@ public:
         uint8_t validFanMask;
     };
 
-public:
     explicit HVACPanel(MemoryCore &flash);
 
     // -------------------------------------------------
@@ -52,8 +60,7 @@ public:
     void setCurrentHvac(uint8_t index);
     uint8_t currentHvac() const;
 
-    void nextHvac();
-    void previousHvac();
+    bool changeHvac(bool forward);
 
     State &currentState();
     const State &currentState() const;
@@ -67,7 +74,7 @@ public:
 
     void setHvacValid(uint8_t index, bool valid);
     bool isHvacValid(uint8_t index) const;
-    uint8_t hvacValidMask() const;
+    // uint8_t hvacValidMask() const;
 
     // -------------------------------------------------
     // Power
@@ -110,8 +117,9 @@ public:
     void setFan(uint8_t fan);
     uint8_t fan() const;
 
-    void nextFan();
-    void previousFan();
+    bool changeFan(bool forward);
+    // void nextFan();
+    // void previousFan();
 
     void setFanValid(uint8_t fan, bool valid);
     bool isFanValid(uint8_t fan) const;
@@ -119,7 +127,8 @@ public:
     static constexpr uint16_t HVAC_IMAGE_SIZE = 240; // 64x30 / 8
 
     const uint8_t *currentImage() const;
-    void loadImages();
+    void fetchImage();
+    void fetchImage(uint8_t index);
 
 private:
     State hvac_[HVAC_COUNT];
@@ -128,12 +137,9 @@ private:
 
     MemoryCore &flash_;
 
-private:
     uint8_t images_[HVAC_COUNT][HVAC_IMAGE_SIZE];
 
-    void loadValidHvac();
-    void loadHvac(uint8_t index);
-
-    FlashHvac toFlash(uint8_t index) const;
-    void fromFlash(uint8_t index, const FlashHvac &data);
+    void fetchHvacValid();
+    void fetchHvacValid(uint8_t index);
+    void fetchHvac(uint8_t index);
 };
