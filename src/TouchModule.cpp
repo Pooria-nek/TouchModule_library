@@ -8,7 +8,7 @@ TouchModule::TouchModule(
     const uint8_t ledPins[TOUCH_PAD_COUNT],
     const uint8_t touchPads[TOUCH_PAD_COUNT],
     bool activeHigh)
-    : wire_(wirePort), bus_(bus), flash_(flash), memoryaddress_(sectorAddress), activeHigh_(activeHigh)
+    : touch_(wirePort), bus_(bus), flash_(flash), memoryaddress_(sectorAddress), activeHigh_(activeHigh)
 #ifdef HAS_OLED_DISPLAY
       ,
       display_(flash, OLED_CS_PIN, OLED_DC_PIN, OLED_RS_PIN)
@@ -22,16 +22,18 @@ TouchModule::TouchModule(
       apds_(wirePort)
 #endif
       ,
+      // touch_(wirePort),
       hvac_(flash),
       switchPanel_(flash),
       ntc1(PB0, 10000.0f, 1000),
       ntc2(PB1, 10000.0f, 1000)
 {
+    touch_.mapKeys(touchPads, TOUCH_PAD_COUNT);
     // mcu::copyMcuUID(uid_);
-    for (uint8_t i = 0; i < TOUCH_PAD_COUNT; i++)
-    {
-        touchPins_[i] = touchPads[i];
-    }
+    // for (uint8_t i = 0; i < TOUCH_PAD_COUNT; i++)
+    // {
+    //     touchPins_[i] = ;
+    // }
 
     leds_.configure(ledPins, activeHigh);
     leds_.setLedLevels(25, 2, 31);
@@ -41,8 +43,6 @@ bool TouchModule::begin()
 {
     ntc1.begin();
     ntc2.begin();
-
-    wire_.begin();
 
     leds_.begin();
     leds_.startupAnimation(); // start the idle timer from "device ready"
@@ -54,6 +54,8 @@ bool TouchModule::begin()
 #ifdef HAS_BUZZER
     buzzer_.startup();
 #endif
+
+    touch_.begin();
 
 #ifdef HAS_APDS
     if (apds_.init())
@@ -96,8 +98,14 @@ void TouchModule::update()
     ntc1.update();
     ntc2.update();
 
-    // Poll the BS8112 for new touch state (call every loop iteration)
-    updateBS8112();
+    bool t = touch_.update();
+
+    if (deviceMode_ == DeviceMode::Sleep && t != 0)
+    {
+        wake();
+
+        touch_.discardPress();
+    }
 
     buttonUpdate();
 
@@ -110,35 +118,17 @@ void TouchModule::update()
 
     updateAPDS();
 
-    display_.clear();
+    // display_.clear();
 
-    hvac_.fetchImage();
+    // hvac_.fetchImage();
 
-    display_.updateResource(hvac_);
+    // display_.updateResource(hvac_);
 
     display_.updateInTemprature(ntc1);
     display_.updateOutTemprature(ntc2);
 
     display_.update();
 }
-
-// void TouchModule::setKeyType(uint8_t key, ButtonType type)
-// {
-//     if (key >= LOGICAL_BUTTON_COUNT)
-//         return;
-
-//     keytype_[key] = type;
-// }
-
-// TouchModule::ButtonType TouchModule::getKeyType(uint8_t key)
-// {
-//     if (key >= LOGICAL_BUTTON_COUNT)
-//         return ButtonType::Invalid;
-//     // NOTE: was keytype_[key - 1] — inconsistent with setKeyType()'s 0-based
-//     // indexing, and for key == 0 the uint8_t underflow (0 - 1 == 255) read
-//     // 255 elements past the array. Fixed to match setKeyType().
-//     return keytype_[key];
-// }
 
 void TouchModule::fetchValidPages()
 {
@@ -185,17 +175,19 @@ void TouchModule::fetchProxValues()
 void TouchModule::buttonUpdate()
 {
     const uint8_t page = display_.getPage();
+
     updatePageLeds(page);
+
 #ifdef HAS_OLED_DISPLAY
 
-    if (isPressed(8))
+    if (touch_.isPressed(8))
     {
         if (display_.changePage(false))
         {
             buzzer_.click();
         }
     }
-    else if (isPressed(9))
+    else if (touch_.isPressed(9))
     {
         if (display_.changePage(true))
         {
@@ -217,7 +209,7 @@ void TouchModule::buttonUpdate()
     case 4:
     {
 
-        uint16_t key = pressedKey();
+        uint16_t key = touch_.pressedKey();
 
         if (key != UINT16_MAX)
         {
@@ -236,56 +228,56 @@ void TouchModule::buttonUpdate()
         bool acted = false;
         uint8_t ledIndex = 0;
 
-        if (isHoldEdge(0))
+        if (touch_.isHoldEdge(0))
         {
             hvac_.nextMode();
             acted = true;
             ledIndex = 0;
         }
 
-        if (isHoldEdge(1))
+        if (touch_.isHoldEdge(1))
         {
             hvac_.togglePower();
             acted = true;
             ledIndex = 1;
         }
 
-        if (isPressed(2))
+        if (touch_.isPressed(2))
         {
             hvac_.decreaseTemp(TEMP_STEP);
             acted = true;
             ledIndex = 2;
         }
 
-        if (isPressed(3))
+        if (touch_.isPressed(3))
         {
             hvac_.increaseTemp(TEMP_STEP);
             acted = true;
             ledIndex = 3;
         }
 
-        if (isPressed(4))
+        if (touch_.isPressed(4))
         {
             hvac_.changeFan(false);
             acted = true;
             ledIndex = 4;
         }
 
-        if (isPressed(5))
+        if (touch_.isPressed(5))
         {
             hvac_.changeFan(true);
             acted = true;
             ledIndex = 5;
         }
 
-        if (isPressed(6))
+        if (touch_.isPressed(6))
         {
             hvac_.changeHvac(false);
             acted = true;
             ledIndex = 6;
         }
 
-        if (isPressed(7))
+        if (touch_.isPressed(7))
         {
             hvac_.changeHvac(true);
             acted = true;
@@ -785,6 +777,8 @@ bool TouchModule::init()
         flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::channelAddress(MemoryAdress::Touch::CHANNEL_DIMMING, i)), 0, 1);
         flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::channelAddress(MemoryAdress::Touch::CHANNEL_DIMMING_VALUE, i)), 0, 1);
     }
+
+    return true;
 }
 
 bool TouchModule::syncValues()
@@ -826,152 +820,14 @@ void TouchModule::updateAPDS()
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////// BS811x Functions ///////////////////////////////
-
-void TouchModule::initBS8112()
-{
-    _touchState = 0;
-
-    // BS8112 Initialization
-    uint8_t config[17];
-    uint8_t KeyTriggerthresholdvalue = 7; // 1-32
-
-    // BS8112 configuration bytes
-    config[0] = 0b00000001;                // B0H: IRQ one-shot enabled
-    config[1] = 0b00000000;                // B1H
-    config[2] = 0x83;                      // B2H
-    config[3] = 0xF3;                      // B3H
-    config[4] = 0b10011000;                // B4H: Powersave
-    config[5] = 0b10011000;                // B5H: Wakeup
-    config[6] = KeyTriggerthresholdvalue;  // B6H K2
-    config[7] = KeyTriggerthresholdvalue;  // B7H K3
-    config[8] = KeyTriggerthresholdvalue;  // B8H K4
-    config[9] = KeyTriggerthresholdvalue;  // B9H K5
-    config[10] = KeyTriggerthresholdvalue; // BAH K6
-    config[11] = KeyTriggerthresholdvalue; // BBH K7
-    config[12] = KeyTriggerthresholdvalue; // BCH K8
-    config[13] = KeyTriggerthresholdvalue; // BDH K9
-    config[14] = KeyTriggerthresholdvalue; // BEH K10
-    config[15] = KeyTriggerthresholdvalue; // BFH K11
-    config[16] = 0b11011000;               // C0H K12 ENABLE IRQ
-
-    // Calculate checksum for register block transfer
-    uint8_t checksum = 0;
-    for (uint8_t i = 0; i < 17; i++)
-        checksum += config[i];
-
-    // Write configuration to hardware
-    wire_.beginTransmission(touch_address);
-    wire_.write(0xB0); // Start register
-    for (uint8_t i = 0; i < 17; i++)
-        wire_.write(config[i]);
-    wire_.write(checksum);
-
-    wire_.endTransmission();
-}
-
 void TouchModule::irqTouchHandler()
 {
-    irqTouchFlag_ = true;
+    touch_.irq();
 }
 
 bool TouchModule::getIrq()
 {
-    return irqTouchFlag_;
-}
-
-/**
- * @brief Polls the hardware for state changes on the configured pads only.
- * @return true if any key state changed, false otherwise.
- */
-bool TouchModule::updateBS8112()
-{
-    if (!irqTouchFlag_ && !_runAgain)
-        return false;
-
-    // Manage IRQ flag for continuous polling if required
-    if (irqTouchFlag_)
-    {
-        irqTouchFlag_ = false;
-        _runAgain = true;
-    }
-    else
-    {
-        _runAgain = false;
-    }
-
-    // Read 2-byte touch status from the device
-    uint16_t rawState = 0;
-
-    wire_.beginTransmission(touch_address);
-    wire_.write(0x08);
-    wire_.endTransmission(false);
-
-    if (wire_.requestFrom(touch_address, (uint8_t)2) == 2)
-    {
-        uint8_t low = wire_.read();
-        uint8_t high = wire_.read();
-
-        rawState = (static_cast<uint16_t>(high) << 8) | low;
-    }
-
-    // Remap configured physical pads into compact bitfield
-    uint16_t newState = 0;
-
-    for (uint8_t i = 0; i < TOUCH_PAD_COUNT; i++)
-    {
-        if (rawState & (1 << (touchPins_[i] - 1)))
-            newState |= (1 << i);
-    }
-
-    // Detect edge transitions
-    bool changed = (newState != _touchState);
-
-    _prevTouchState = _touchState;
-    _touchState = newState;
-
-    _pressedEdge = (~_prevTouchState) & _touchState;
-    _releasedEdge = _prevTouchState & (~_touchState);
-
-    // Update timing for hold detection
-    uint32_t now = millis();
-
-    if (_pressedEdge != 0)
-        lastActivityTime_ = now; // any fresh press counts as activity
-
-    // -------------------------------------------------
-    // SLEEP MODE
-    // First touch only wakes the device.
-    // It must NOT perform the normal button action.
-    // -------------------------------------------------
-    if (deviceMode_ == DeviceMode::Sleep && _pressedEdge != 0)
-    {
-        wake();
-
-        // Clear the press so the same touch cannot
-        // accidentally be treated as a normal action.
-        _pressedEdge = 0;
-
-        // Reset hold state for safety
-        _holdActive = 0;
-
-        for (uint8_t key = 0; key < TOUCH_PAD_COUNT; key++)
-            _lastPressTime[key] = now;
-
-        return changed;
-    }
-
-    for (uint8_t key = 0; key < TOUCH_PAD_COUNT; key++)
-    {
-        if (_pressedEdge & (1 << key))
-        {
-            _lastPressTime[key] = now;
-            _holdActive &= ~(1 << key);
-        }
-    }
-
-    return changed;
+    return touch_.irqPending();
 }
 
 uint8_t TouchModule::getPhysicalButton(uint8_t key)
@@ -990,6 +846,14 @@ uint8_t TouchModule::getLogicalButton(uint8_t key)
     return (key / 2) + 1 + ((display_.getPage() - 1) * 4);
 }
 
+void TouchModule::checkAutoSleep()
+{
+    if (deviceMode_ == DeviceMode::Wake && (millis() - lastActivityTime_ >= sleepTimeoutMs_))
+    {
+        sleep();
+    }
+}
+
 void TouchModule::sleep()
 {
     deviceMode_ = DeviceMode::Sleep;
@@ -1005,94 +869,6 @@ void TouchModule::wake()
 
     markActivity(); // waking counts as activity — restart the idle timer
 }
-
-void TouchModule::checkAutoSleep()
-{
-    if (deviceMode_ == DeviceMode::Wake && (millis() - lastActivityTime_ >= sleepTimeoutMs_))
-    {
-        sleep();
-    }
-}
-
-// true for the entire duration the channel is held down
-bool TouchModule::isHold(uint8_t key)
-{
-    if (key >= TOUCH_PAD_COUNT)
-        return false;
-    return (_touchState & (1 << key)) != 0;
-}
-
-// just run on touch edge once
-bool TouchModule::isPressed(uint8_t key)
-{
-    if (key >= TOUCH_PAD_COUNT)
-        return false;
-    return (_pressedEdge & (1 << key)) != 0;
-}
-
-uint16_t TouchModule::pressedKey()
-{
-    for (uint8_t key = 0; key < TOUCH_PAD_COUNT; ++key)
-    {
-        if (_pressedEdge & (uint16_t(1) << key))
-        {
-            _pressedEdge &= ~(uint16_t(1) << key);
-            return key;
-        }
-    }
-
-    return UINT16_MAX;
-}
-
-// just run on release edge once
-bool TouchModule::isReleased(uint8_t key)
-{
-    if (key >= TOUCH_PAD_COUNT)
-        return false;
-    return (_releasedEdge & (1 << key)) != 0;
-}
-
-// true once, the first time a channel has been held past TOUCH_HOLD_TIME
-bool TouchModule::isHoldEdge(uint8_t key)
-{
-    if (key >= TOUCH_PAD_COUNT)
-        return false;
-
-    if (isHold(key))
-    {
-        uint32_t now = millis();
-        if (!(_holdActive & (1 << key)) && (now - _lastPressTime[key] >= TOUCH_HOLD_TIME))
-        {
-            _holdActive |= (1 << key);
-            return true;
-        }
-    }
-    return false;
-}
-
-void TouchModule::writeRegister(uint8_t reg, uint8_t value)
-{
-    wire_.beginTransmission(touch_address);
-    wire_.write(reg);
-    wire_.write(value);
-    wire_.endTransmission();
-}
-
-uint8_t TouchModule::readRegister(uint8_t reg)
-{
-    wire_.beginTransmission(touch_address);
-    wire_.write(reg);
-    wire_.endTransmission(false);
-
-    wire_.requestFrom(touch_address, (uint8_t)1);
-    if (wire_.available())
-        return wire_.read();
-
-    return 0;
-}
-
-/////////////////////////////// BS811x Functions ///////////////////////////////
-////////////////////////////////////////////////////////////////////////////////
 
 // LED indicator logic (mode state machine + software PWM) now lives entirely
 // in LedHandler.h — TouchModule just owns a LedHandler<TOUCH_PAD_COUNT>
@@ -1422,23 +1198,6 @@ bool TouchModule::sendConfirm(uint16_t opcode, uint16_t dst, const uint8_t *payl
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-// 00001 2026/09/27 15:04:59:235  0D 01 12 00 95 00 02 01 06 01 01 97 FE
-// 00002 2026/09/27 15:04:59:936  0D 01 12 00 95 00 02 01 06 02 01 C2 AD
-
-// 00005 2026/09/27 15:05:14:690  0D 01 12 00 95 00 1A 01 06 04 01 6E 7C
-// 00006 2026/09/27 15:05:15:290  0D 01 12 00 95 00 02 01 07 01 01 A0 CE
-
-// 00008 2026/09/27 15:05:21:011  0D 01 12 00 95 00 02 01 06 03 01 F1 9C
-
-// 00011 2026/09/27 15:05:25:026  0D 01 12 00 95 00 02 01 06 01 00 87 DF
-// 00012 2026/09/27 15:05:25:729  0D 01 12 00 95 00 02 01 06 02 00 D2 8C
-// 00013 2026/09/27 15:05:26:430  0D 01 12 00 95 00 02 01 06 03 00 E1 BD
-// 00014 2026/09/27 15:05:27:133  0D 01 12 00 95 00 02 01 06 04 00 78 2A
-// 00015 2026/09/27 15:05:27:936  0D 01 12 00 95 00 02 01 07 01 00 B0 EF
-// 00016 2026/09/27 15:05:28:540  0D 01 12 00 95 00 02 01 04 01 00 E9 BF
-// 00017 2026/09/27 15:05:29:240  0D 01 12 00 95 00 02 01 05 01 00 DE 8F
-// 00018 2026/09/27 15:05:32:652  0D 01 12 00 95 E0 1C 01 3A 02 00 22 82
 
 ////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////// DLP Functions /////////////////////////////////
@@ -2196,8 +1955,7 @@ void TouchModule::handleReadImage(const BusproFrame &frame)
 
     uint8_t payload[22] = {
         imageNumber,
-        packetNumber
-    };
+        packetNumber};
 
     uint8_t flashData[16];
 
@@ -2267,40 +2025,7 @@ void TouchModule::handleReadImage(const BusproFrame &frame)
         payload,
         sizeof(payload));
 }
-//// new way of read ////
-// void TouchModule::handleReadImage(const BusproFrame &frame)
-// {
-//     if (frame.payloadLen != 2)
-//         return;
 
-//     uint8_t imageNumber = frame.payload[0];
-//     uint8_t packetNumber = frame.payload[1];
-
-//     uint8_t payload[22] = {imageNumber, packetNumber};
-
-//     uint8_t flashData[16];
-
-//     flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_IMAGES, MemoryAdress::Touch::pageImage(imageNumber, packetNumber)), flashData, sizeof(flashData));
-
-//     // Padding
-//     payload[2] = 0xFF;
-
-//     // First 8 bytes
-//     memcpy(payload + 3, flashData, 8);
-
-//     // Padding
-//     payload[11] = 0xFF;
-//     payload[12] = 0xFF;
-
-//     // Second 8 bytes
-//     memcpy(payload + 13, flashData + 8, 8);
-
-//     // Padding
-//     payload[21] = 0xFF;
-
-//     sendResponse(BusproOp::Touch::IMAGE_READING.resp(), frame.srcAddress, payload, sizeof(payload));
-// }
-//// old way of modify ////
 void TouchModule::handleModifyImage(const BusproFrame &frame)
 {
     if (frame.payloadLen != 22)
@@ -2355,76 +2080,6 @@ void TouchModule::handleModifyImage(const BusproFrame &frame)
     uint8_t payload[3] = {BusproOp::SUCCESS, imageNumber, packetNumber};
 
     sendResponse(BusproOp::Touch::IMAGE_MODIFY.resp(), frame.srcAddress, payload, sizeof(payload));
-}
-//// new way of modify ////
-// void TouchModule::handleModifyImage(const BusproFrame &frame)
-// {
-//     if (frame.payloadLen != 22)
-//         return;
-
-//     uint8_t imageNumber = frame.payload[0];
-//     uint8_t packetNumber = frame.payload[1];
-
-//     uint8_t flashData[16];
-
-//     // First 8 useful bytes
-//     memcpy(flashData, frame.payload + 3, 8);
-
-//     // Second 8 useful bytes
-//     memcpy(flashData + 8, frame.payload + 13, 8);
-
-//     if (configMode == 0)
-//     {
-//         flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_IMAGES, MemoryAdress::Touch::pageImage(imageNumber, packetNumber)), flashData, sizeof(flashData));
-//     }
-//     else if (configMode == 1)
-//     {
-//         // 4 HVAC images per page
-//         uint8_t hvacIndex = imageNumber * 4 + (packetNumber / 16);
-
-//         // Packet inside the selected 256-byte image
-//         uint8_t imagePacket = packetNumber % 16;
-
-//         // Safety check
-//         if (hvacIndex >= 8 || packetNumber >= 64)
-//             return;
-
-//         uint32_t address = MemoryAdress::Touch::HVAC_IMAGE[hvacIndex] + (imagePacket * 16);
-
-//         flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_ICONS, address), flashData, sizeof(flashData));
-//     }
-
-//     uint8_t payload[3] = {BusproOp::SUCCESS, imageNumber, packetNumber};
-
-//     sendResponse(BusproOp::Touch::IMAGE_MODIFY.resp(), frame.srcAddress, payload, sizeof(payload));
-// }
-
-// void TouchModule::readImage()
-// {
-//     uint8_t imageBuffer[960];
-
-//     uint8_t page = display_.getPage();
-
-//     if (page >= 0 && page <= 3)
-//     {
-//         for (uint8_t y = 0; y < 60; y++)
-//         {
-//             flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_IMAGES, MemoryAdress::Touch::pageImage(page, y)), imageBuffer + (y * 16), 16);
-//         }
-
-//         display_.drawImage(imageBuffer);
-//     }
-// }
-
-bool TouchModule::isChunkEmpty(const uint8_t *buffer, uint16_t size)
-{
-    for (uint16_t i = 0; i < size; i++)
-    {
-        if (buffer[i] != 0x00)
-            return false;
-    }
-
-    return true;
 }
 
 void TouchModule::handlePanelControl(const BusproFrame &frame)
