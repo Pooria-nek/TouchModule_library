@@ -207,7 +207,7 @@ public:
     //            finishOperation() once the underlying action actually completes
     using LedMode = LedHandler<TOUCH_PAD_COUNT>::LedMode;
 
-    TouchModule(TwoWire &wirePort, BusproTransport &bus, MemoryCore &flash, uint32_t sectorAddress, const uint8_t touchPins[TOUCH_PAD_COUNT], const uint8_t touchPads[TOUCH_PAD_COUNT], bool activeHigh = true);
+    TouchModule(TwoWire &wirePort, BusproTransport &bus, MemoryCore &flash, const uint8_t touchPins[TOUCH_PAD_COUNT], const uint8_t touchPads[TOUCH_PAD_COUNT], bool activeHigh = true);
 
     NTC ntc1;
     NTC ntc2;
@@ -303,7 +303,7 @@ private:
 
     // bool runSeprateHold(bool lefty, bool combination, uint8_t button);
 
-    uint32_t memoryaddress_; // its the refrens address of data on memoryflash
+    uint32_t memoryaddress_ = MemoryAdress::Touch::SECTOR_INFO; // its the refrens address of data on memoryflash
 
     BusproTransport &bus_;
     MemoryCore &flash_;

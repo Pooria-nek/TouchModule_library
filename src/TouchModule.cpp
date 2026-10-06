@@ -4,11 +4,10 @@ TouchModule::TouchModule(
     TwoWire &wirePort,
     BusproTransport &bus,
     MemoryCore &flash,
-    uint32_t sectorAddress,
     const uint8_t ledPins[TOUCH_PAD_COUNT],
     const uint8_t touchPads[TOUCH_PAD_COUNT],
     bool activeHigh)
-    : touch_(wirePort), bus_(bus), flash_(flash), memoryaddress_(sectorAddress), activeHigh_(activeHigh)
+    : touch_(wirePort), bus_(bus), flash_(flash), activeHigh_(activeHigh)
 #ifdef HAS_OLED_DISPLAY
       ,
       display_(flash, OLED_CS_PIN, OLED_DC_PIN, OLED_RS_PIN)
@@ -72,7 +71,7 @@ bool TouchModule::begin()
 
     wake();
 
-    // flash_.eraseSector(MemoryAdress::Touch::SECTOR_INFO);
+    // flash_.eraseSector(memoryaddress_);
 
     if (firstime())
     {
@@ -134,7 +133,7 @@ void TouchModule::fetchValidPages()
 {
     uint8_t value[6] = {};
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PAGE_VALID_BASE), value, 6);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PAGE_VALID_BASE), value, 6);
 
     display_.setValidPages(value);
 }
@@ -143,7 +142,7 @@ void TouchModule::fetchSleepValues()
 {
     uint8_t value[6] = {};
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PAGE_SLEEP_TIME), value, 6);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PAGE_SLEEP_TIME), value, 6);
 
     // 1 - sleep time 10 to 99 -> 100 = always on
     // 2 - sleep level
@@ -160,7 +159,7 @@ void TouchModule::fetchSleepValues()
 void TouchModule::fetchProxValues()
 {
     uint8_t value[8] = {};
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PROX_FLAG), value, 8);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PROX_FLAG), value, 8);
 
     if (value[0] == 0)
     {
@@ -504,6 +503,11 @@ void TouchModule::functionRunner(uint8_t page, uint16_t key)
         functionStart = (P & 1) ? 0 : 50;
         break;
 
+    case static_cast<uint8_t>(SwitchPanel::SwitchType::DblclickSingle):
+        functionCount = (P & 1) ? 1 : 50;
+        functionStart = (P & 1) ? 0 : 50;
+        break;
+
     default:
         return;
     }
@@ -570,27 +574,19 @@ void TouchModule::updateFunctionRunner()
         // Destination
         // ---------------------------------------------------------
 
-        uint16_t dstAddress =
-            (static_cast<uint16_t>(function[1]) << 8) |
-            function[2];
-
-        uint8_t spacket[4] = {
-            function[3],
-            function[4],
-            function[5],
-            function[6]};
+        uint16_t dstAddress = (static_cast<uint16_t>(function[1]) << 8) | function[2];
 
         // ---------------------------------------------------------
         // Operation information
         // ---------------------------------------------------------
 
-        uint16_t oprCode =
-            switchPanel_.getOperationCode(function[0]);
+        uint16_t oprCode = switchPanel_.getOperationCode(function[0]);
 
-        uint8_t ssize =
-            switchPanel_.getOperationLen(function[0]);
+        SwitchPanel::FunctionPacket spacket{};
 
-        if (oprCode == 0 || ssize == 0)
+        spacket.size = switchPanel_.makeFunction(spacket, functionRunnerState_.key, leds_.getLedMode(functionRunnerState_.key), function);
+
+        if (spacket.size == 0)
             continue;
 
         // ---------------------------------------------------------
@@ -638,11 +634,7 @@ void TouchModule::updateFunctionRunner()
         // Execute
         // ---------------------------------------------------------
 
-        sendConfirm(
-            oprCode,
-            dstAddress,
-            spacket,
-            sizeof(spacket));
+        sendConfirm(oprCode, dstAddress, spacket.data, spacket.size);
     }
 
     // -------------------------------------------------------------
@@ -691,7 +683,7 @@ void TouchModule::updateFunctionRunner()
 bool TouchModule::firstime()
 {
     uint8_t payload[16];
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_ADDRESS), payload, sizeof(payload));
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_ADDRESS), payload, sizeof(payload));
 
     for (uint8_t i = 0; i < sizeof(payload); i++)
     {
@@ -702,10 +694,10 @@ bool TouchModule::firstime()
     return true;
 
     // // uint8_t fuid_[12];
-    // // flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_MAC_ADDRESS), fuid_, 12);
+    // // flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_MAC_ADDRESS), fuid_, 12);
 
     // uint16_t fdevType;
-    // // flash_.readObject(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_TYPE), fdevType);
+    // // flash_.readObject(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_TYPE), fdevType);
 
     // // if ((!mcu::bufferEquals(fuid_, uid_, 12)) || (devType_ != fdevType))
     // if (devType_ != fdevType)
@@ -723,7 +715,7 @@ bool TouchModule::reMatch()
 {
     char storedVersion[20] = {};
 
-    auto address = flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_SOFTWARE_VER);
+    auto address = flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_SOFTWARE_VER);
 
     flash_.read(address, storedVersion, sizeof(storedVersion));
 
@@ -741,41 +733,40 @@ bool TouchModule::reMatch()
 bool TouchModule::init()
 {
     uint8_t payload[2] = {static_cast<uint8_t>(deviceAddress_ >> 8), static_cast<uint8_t>(deviceAddress_ & 0xFF)};
-    flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_ADDRESS), payload, sizeof(payload));
+    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_ADDRESS), payload, sizeof(payload));
 
     uint8_t payload1[2] = {static_cast<uint8_t>(devType_ >> 8), static_cast<uint8_t>(devType_ & 0xFF)};
-    flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_TYPE), payload1, sizeof(payload1));
+    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_TYPE), payload1, sizeof(payload1));
 
     // // MCU UID
     // const uint8_t *uid = mcu::getMcuUID();
-    // flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_TYPE), uid, mcu::MCU_UID_LEN);
+    // flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_TYPE), uid, mcu::MCU_UID_LEN);
 
     // uint8_t fuid_[12];
-    // flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_MAC_ADDRESS), fuid_, sizeof(fuid_));
+    // flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_MAC_ADDRESS), fuid_, sizeof(fuid_));
 
-    flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_REMARK), "Zeller Z27", 20);
-    flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_HARDWARE_VER), "STM3F103RB", 30);
-    flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_SOFTWARE_VER), SOFTWARE_VERSION, 20);
+    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_REMARK), "Zeller Z27", 20);
+    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_HARDWARE_VER), "STM3F103RB", 30);
+    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_SOFTWARE_VER), SOFTWARE_VERSION, 20);
 
     uint8_t value[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-    flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PROX_FLAG), value, sizeof(value));
+    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PROX_FLAG), value, sizeof(value));
 
     uint8_t validpage[6] = {1, 0, 0, 0, 0, 0};
-    flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PAGE_VALID_BASE), validpage, sizeof(validpage));
+    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PAGE_VALID_BASE), validpage, sizeof(validpage));
 
     char remark[20];
     for (size_t i = 1; i <= LOGICAL_BUTTON_COUNT; i++)
     {
-        // uint8_t channel = i + 1;
         snprintf(remark, sizeof(remark), "Button %d", static_cast<unsigned>(i));
-        flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::channelRemark(i)), remark, sizeof(remark));
+        flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::channelRemark(i)), remark, sizeof(remark));
 
         uint8_t mode = static_cast<uint8_t>(SwitchPanel::SwitchType::Invalid);
 
-        flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::channelAddress(MemoryAdress::Touch::CHANNEL_MODE, i)), &mode, sizeof(mode));
-        flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::channelAddress(MemoryAdress::Touch::CHANNEL_STATUE, i)), 0, 1);
-        flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::channelAddress(MemoryAdress::Touch::CHANNEL_DIMMING, i)), 0, 1);
-        flash_.write(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::channelAddress(MemoryAdress::Touch::CHANNEL_DIMMING_VALUE, i)), 0, 1);
+        flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::channelAddress(MemoryAdress::Touch::CHANNEL_MODE, i)), &mode, sizeof(mode));
+        flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::channelAddress(MemoryAdress::Touch::CHANNEL_STATUE, i)), 0, 1);
+        flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::channelAddress(MemoryAdress::Touch::CHANNEL_DIMMING, i)), 0, 1);
+        flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::channelAddress(MemoryAdress::Touch::CHANNEL_DIMMING_VALUE, i)), 0, 1);
     }
 
     return true;
@@ -784,15 +775,15 @@ bool TouchModule::init()
 bool TouchModule::syncValues()
 {
     uint8_t payload[2] = {};
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_ADDRESS), payload, 2);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_ADDRESS), payload, 2);
     deviceAddress_ = (static_cast<uint16_t>(payload[0]) << 8) | payload[1];
 
-    // flash_.readObject(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_MAC_ADDRESS), uid_);
+    // flash_.readObject(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_MAC_ADDRESS), uid_);
 
-    // flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::CHANNEL_MODE), payload, LOGICAL_BUTTON_COUNT);
-    // flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::CHANNEL_STATUE), payload, LOGICAL_BUTTON_COUNT);
-    // flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::CHANNEL_DIMMING), payload, LOGICAL_BUTTON_COUNT);
-    // flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::CHANNEL_DIMMING_VALUE), payload, LOGICAL_BUTTON_COUNT);
+    // flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::CHANNEL_MODE), payload, LOGICAL_BUTTON_COUNT);
+    // flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::CHANNEL_STATUE), payload, LOGICAL_BUTTON_COUNT);
+    // flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::CHANNEL_DIMMING), payload, LOGICAL_BUTTON_COUNT);
+    // flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::CHANNEL_DIMMING_VALUE), payload, LOGICAL_BUTTON_COUNT);
 
     fetchValidPages();
     fetchSleepValues();
@@ -823,6 +814,7 @@ void TouchModule::updateAPDS()
 void TouchModule::irqTouchHandler()
 {
     touch_.irq();
+    markActivity();
 }
 
 bool TouchModule::getIrq()
@@ -1145,30 +1137,30 @@ void TouchModule::process(const BusproFrame &frame)
             handleModifyImage(frame);
             break;
 
+            //////////////////////////////////// RESPONDS //////////////////////////////////////
+
         case BusproOp::Touch::PANEL_CONTROL.req():
             handlePanelControl(frame);
             break;
 
-            //////////////////////////////////// RESPONDS //////////////////////////////////////
+            // case BusproOp::CONTROL_SINGLE.resp():
+            //     break;
 
-        case BusproOp::CONTROL_SINGLE.resp():
-            break;
-
-        case BusproOp::SCENE_CONTROL.resp():
-            break;
+            // case BusproOp::SCENE_CONTROL.resp():
+            //     break;
         }
     }
 }
 
 void TouchModule::sendResponse(uint16_t opcode, uint16_t dst, const uint8_t *payload, uint8_t payloadLen)
 {
-    delay(50);
+    // delay(50);
     bus_.send(deviceAddress_, devType_, opcode, dst, payload, payloadLen);
 }
 
 bool TouchModule::sendConfirm(uint16_t opcode, uint16_t dst, const uint8_t *payload, uint8_t payloadLen)
 {
-    constexpr uint8_t MAX_RETRIES = 3;
+    constexpr uint8_t MAX_RETRIES = 1;
     constexpr uint32_t TIMEOUT = 100;
 
     const uint16_t expectedOpcode = opcode + 1;
@@ -1243,7 +1235,7 @@ void TouchModule::handleReadIndensity(const BusproFrame &frame)
     // payload[0] = display_.brightness();
     // payload[1] = leds_.brightness();
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PAGE_LCD_DIMM), payload, 2);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PAGE_LCD_DIMM), payload, 2);
 
     sendResponse(BusproOp::Touch::INDENSITY.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1253,7 +1245,7 @@ void TouchModule::handleModifyIndensity(const BusproFrame &frame)
     if (frame.payloadLen != 11)
         return;
 
-    flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PAGE_LCD_DIMM), frame.payload, 2);
+    flash_.update(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PAGE_LCD_DIMM), frame.payload, 2);
 
     // 1 - LCD backlight
     // 2 - Button LED
@@ -1274,7 +1266,7 @@ void TouchModule::handleReadUivalues(const BusproFrame &frame)
 
     uint8_t payload[9] = {BusproOp::SUCCESS}; // if no temp 8 -> 9 with temp
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PROX_FLAG), payload + 1, 8);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PROX_FLAG), payload + 1, 8);
 
     sendResponse(BusproOp::Touch::UI_VALUES.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1292,7 +1284,7 @@ void TouchModule::handleModifyUivalues(const BusproFrame &frame)
     // 7 - font size
     // 8 - Temprature Source
 
-    flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PROX_FLAG), frame.payload, 8);
+    flash_.update(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PROX_FLAG), frame.payload, 8);
 
     fetchProxValues();
 
@@ -1308,7 +1300,7 @@ void TouchModule::handleReadEnablePage(const BusproFrame &frame)
 
     uint8_t payload[7] = {};
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PAGE_VALID_BASE), payload, 7);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PAGE_VALID_BASE), payload, 7);
 
     // payload[5] = payload[6];
     // payload[6] = payload[5];
@@ -1330,7 +1322,7 @@ void TouchModule::handleModifyEnablePage(const BusproFrame &frame)
     valid[5] = frame.payload[6];
     // valid[6] = frame.payload[5]; // for music
 
-    flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PAGE_VALID_BASE), valid, sizeof(valid));
+    flash_.update(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PAGE_VALID_BASE), valid, sizeof(valid));
 
     fetchValidPages();
 
@@ -1403,7 +1395,7 @@ void TouchModule::handleModifyPOpration5(const BusproFrame &frame)
     // 5 -
     // 6 - trig button when it wake
 
-    flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::PAGE_SLEEP_TIME), frame.payload, 6);
+    flash_.update(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PAGE_SLEEP_TIME), frame.payload, 6);
 
     fetchSleepValues();
 
@@ -1470,7 +1462,7 @@ void TouchModule::handleReadTouchStatue(const BusproFrame &frame)
 
     uint8_t payload[LOGICAL_BUTTON_COUNT];
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::CHANNEL_STATUE), payload, LOGICAL_BUTTON_COUNT);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::CHANNEL_STATUE), payload, LOGICAL_BUTTON_COUNT);
 
     sendResponse(BusproOp::Touch::CHANNEL_STATUS.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1490,7 +1482,7 @@ void TouchModule::handleReadTouchDimming(const BusproFrame &frame)
 
     uint8_t payload[LOGICAL_BUTTON_COUNT];
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::CHANNEL_DIMMING), payload, LOGICAL_BUTTON_COUNT);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::CHANNEL_DIMMING), payload, LOGICAL_BUTTON_COUNT);
 
     sendResponse(BusproOp::Touch::CHANNEL_DIMMING.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1510,7 +1502,7 @@ void TouchModule::handleReadTouchDimmingValue(const BusproFrame &frame)
 
     uint8_t payload[LOGICAL_BUTTON_COUNT];
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::CHANNEL_DIMMING_VALUE), payload, LOGICAL_BUTTON_COUNT);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::CHANNEL_DIMMING_VALUE), payload, LOGICAL_BUTTON_COUNT);
 
     sendResponse(BusproOp::Touch::CHANNEL_DIMMING_VALUE.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1558,7 +1550,7 @@ void TouchModule::handleReadTouchRemark(const BusproFrame &frame)
 
     uint8_t payload[21] = {touchNum};
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::channelRemark(touchNum)), payload + 1, 20);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::channelRemark(touchNum)), payload + 1, 20);
 
     sendResponse(BusproOp::Touch::CHANNEL_REMARK.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1571,7 +1563,7 @@ void TouchModule::handleModifyTouchRemark(const BusproFrame &frame)
 
     uint8_t payload[21] = {touchNum};
 
-    flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::channelRemark(touchNum)), frame.payload + 1, 20);
+    flash_.update(flash_.findAdrress(memoryaddress_, MemoryAdress::channelRemark(touchNum)), frame.payload + 1, 20);
 
     sendResponse(BusproOp::Touch::CHANNEL_REMARK.writeResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -2105,7 +2097,7 @@ void TouchModule::handleReadFirmware(const BusproFrame &frame)
 
     uint8_t payload[20] = {0x00};
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_SOFTWARE_VER), payload, sizeof(payload));
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_SOFTWARE_VER), payload, sizeof(payload));
 
     sendResponse(BusproOp::DEVICE_FIRMWARE.resp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -2117,7 +2109,7 @@ void TouchModule::handleReadHardware(const BusproFrame &frame)
 
     uint8_t payload[30] = {};
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_HARDWARE_VER), payload, sizeof(payload));
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_HARDWARE_VER), payload, sizeof(payload));
 
     sendResponse(BusproOp::DEVICE_HARDWARE.resp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -2163,7 +2155,7 @@ void TouchModule::handleSearchDevice(const BusproFrame &frame)
         payload[3] = frame.payload[3];
     }
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_REMARK), payload + frame.payloadLen, 20);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_REMARK), payload + frame.payloadLen, 20);
 
     sendResponse(BusproOp::DEVICE_SEARCH_HDL.resp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -2179,7 +2171,6 @@ void TouchModule::handleReadMacaddress(const BusproFrame &frame)
 
     sendResponse(BusproOp::DEVICE_MAC_ADDRESS.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
-
 void TouchModule::handleModifyMacaddress(const BusproFrame &frame)
 {
     if (frame.payloadLen != 10)
@@ -2190,7 +2181,7 @@ void TouchModule::handleModifyMacaddress(const BusproFrame &frame)
 
     uint8_t address[2] = {frame.payload[8], frame.payload[9]};
 
-    flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_ADDRESS), address, 2);
+    flash_.update(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_ADDRESS), address, 2);
     syncValues();
 
     uint8_t payload[1] = {BusproOp::SUCCESS};
@@ -2207,7 +2198,7 @@ void TouchModule::handleReadDeviceRemark(const BusproFrame &frame)
 
     if (configMode == 0)
     {
-        flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_REMARK), payload, sizeof(payload));
+        flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_REMARK), payload, sizeof(payload));
     }
     else
     {
@@ -2229,7 +2220,7 @@ void TouchModule::handleModifyDeviceRemark(const BusproFrame &frame)
     }
     else
     {
-        flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::DEVICE_REMARK), frame.payload, frame.payloadLen);
+        flash_.update(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_REMARK), frame.payload, frame.payloadLen);
     }
 
     uint8_t payload[1] = {BusproOp::SUCCESS};

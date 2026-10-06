@@ -91,11 +91,11 @@ public:
 
     enum class LedMode : uint8_t
     {
-        Sleep = 0,
         Deactive, // Steady at deactive brightness
         Active,   // Steady at active brightness
         Blink,    // Blink once, then return to the previous mode
-        Blinking  // Continue blinking until explicitly changed
+        Blinking, // Continue blinking until explicitly changed
+        Sleep
     };
 
     LedHandler() = default;
@@ -127,15 +127,12 @@ public:
         uint8_t channel,
         LedMode mode);
 
-    LedMode getLedMode(
-        uint8_t channel) const;
+    uint8_t getLedMode(uint8_t channel) const;
 
-    void setAllLedMode(
-        LedMode mode);
+    void setAllLedMode(LedMode mode);
 
     // Return a channel to Deactive mode after an operation finishes.
-    void finishOperation(
-        uint8_t channel);
+    void finishOperation(uint8_t channel);
 
     // ========================================================================
     // Brightness / timing

@@ -191,15 +191,9 @@ void LedHandler<CHANNEL_COUNT>::update()
 // ============================================================================
 
 template <uint8_t CHANNEL_COUNT>
-typename LedHandler<CHANNEL_COUNT>::LedMode
-LedHandler<CHANNEL_COUNT>::getLedMode(uint8_t channel) const
+uint8_t LedHandler<CHANNEL_COUNT>::getLedMode(uint8_t channel) const
 {
-    if (channel >= CHANNEL_COUNT)
-        return LedMode::Deactive;
-
-    CriticalSection cs;
-
-    return ledMode_[channel];
+    return static_cast<uint8_t>(ledMode_[channel]);
 }
 
 template <uint8_t CHANNEL_COUNT>
