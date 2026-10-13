@@ -1,4 +1,5 @@
 #include "TouchModule.h"
+#include <type_traits>
 
 TouchModule::TouchModule(
     TwoWire &wirePort,
@@ -27,6 +28,7 @@ TouchModule::TouchModule(
       ntc1(PB0, 10000.0f, 1000),
       ntc2(PB1, 10000.0f, 1000)
 {
+    static_assert(std::is_reference<decltype(bus_)>::value, "bus_ must be a reference");
     touch_.mapKeys(touchPads, TOUCH_PAD_COUNT);
     // mcu::copyMcuUID(uid_);
     // for (uint8_t i = 0; i < TOUCH_PAD_COUNT; i++)
@@ -57,21 +59,17 @@ bool TouchModule::begin()
     touch_.begin();
 
 #ifdef HAS_APDS
-    if (apds_.init())
+    if (apds_.begin() &&
+        apds_.enableProximitySensor(true)) // interrupts off for now
     {
-        apds_.enableProximitySensor();
-        apds_.enableLightSensor();
-
-        apds_.setLightThresholds(20, 200);
-        apds_.setBrightnessRange(7, 15);
+        apds_.setProximityThresholds(500, 800); // far / near, PIHT = 800
+        apds_.disarmProximityInterrupt();       // clears any stale latched INT
     }
 #endif
 
     delay(3000);
 
     wake();
-
-    // flash_.eraseSector(memoryaddress_);
 
     if (firstime())
     {
@@ -161,29 +159,27 @@ void TouchModule::fetchProxValues()
     uint8_t value[8] = {};
     flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PROX_FLAG), value, 8);
 
-    if (value[0] == 0)
-    {
-        apds_.enableProximitySensor();
-    }
-    else
-    {
-        apds_.disableProximitySensor();
-    }
+    // #ifdef HAS_APDS
+    //     if (value[0] == 0)
+    //     {
+    //         apds_.enableProximitySensor();
+    //     }
+    //     else
+    //     {
+    //         apds_.disableProximitySensor();
+    //     }
+    // #endif
 }
 
 void TouchModule::buttonUpdate()
 {
-    const uint8_t page = display_.getPage();
-
-    updatePageLeds(page);
-
 #ifdef HAS_OLED_DISPLAY
-
     if (touch_.isPressed(8))
     {
         if (display_.changePage(false))
         {
             buzzer_.click();
+            return;
         }
     }
     else if (touch_.isPressed(9))
@@ -191,14 +187,17 @@ void TouchModule::buttonUpdate()
         if (display_.changePage(true))
         {
             buzzer_.click();
+            return;
         }
     }
 
     leds_.setLedMode(8, LedHandler<TOUCH_PAD_COUNT>::LedMode::Active);
-
     leds_.setLedMode(9, LedHandler<TOUCH_PAD_COUNT>::LedMode::Active);
-
 #endif
+
+    const uint8_t page = display_.getPage();
+
+    updatePageLeds(page);
 
     switch (page)
     {
@@ -207,14 +206,11 @@ void TouchModule::buttonUpdate()
     case 3:
     case 4:
     {
-
         uint16_t key = touch_.pressedKey();
 
         if (key != UINT16_MAX)
         {
-            buzzer_.click();
-            // ledRunner(page, key);
-            functionRunner(page, key);
+            functionRunner(key);
         }
 
         // Switch pages
@@ -355,182 +351,138 @@ void TouchModule::updatePageLeds(uint8_t page)
     {
         const uint8_t ledAddress = start + key;
 
-        leds_.setLedMode(key, ledState[ledAddress] ? LedMode::Active : LedMode::Deactive);
+        // leds_.setLedMode(key, ledState[ledAddress] ? LedMode::Active : LedMode::Deactive);
+        switch (ledState[ledAddress])
+        {
+        case 0:
+            leds_.setLedMode(key, LedMode::Deactive);
+            break;
+
+        case 1:
+            leds_.setLedMode(key, LedMode::Active);
+            break;
+
+        case 2:
+            leds_.setLedMode(key, LedMode::Blinking);
+            break;
+
+        default:
+            break;
+        }
     }
 }
 
-void TouchModule::ledRunner(uint8_t page, uint16_t key)
+void TouchModule::setMergedLedState(uint16_t key, bool state)
 {
-    uint16_t L = getLogicalButton(key);
-    uint16_t P = getPhysicalButton(key);
-
-    uint8_t keyType = switchPanel_.getKeyType(L);
-
-    uint8_t ledAddressSingle = ((page - 1) * 8) + key;
-
-    switch (keyType)
-    {
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::SingleON):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::SingleOFF):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::SingleONOFF):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationON):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationOFF):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationONOFF):
-        ledState[ledAddressSingle] = !ledState[ledAddressSingle];
-
-        // Toggle its paired LED
-        uint8_t pairedAddress;
-
-        if ((ledAddressSingle % 2) == 0)
-            pairedAddress = ledAddressSingle + 1;
-        else
-            pairedAddress = ledAddressSingle - 1;
-
-        ledState[pairedAddress] = !ledState[pairedAddress];
-
-        break;
-
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::DblclickSingle):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::DblclickCombined):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::ShortLongPress):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::ShortLongJog):
-        ledState[ledAddressSingle] = !ledState[ledAddressSingle];
-        break;
-
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::Invalid):
-        ledState[ledAddressSingle] = 0x00;
-        break;
-
-    default:
-        break;
-    }
-
-    // uint8_t payload[5];
-
-    // payload[0] = page;
-    // payload[1] = key;
-    // payload[2] = L;
-
-    // payload[3] = P;
-    // payload[4] = keyType;
-    // payload[5] = ledState[ledAddress];
-
-    // sendResponse(0xCCCC, 0xCCCC, payload, sizeof(payload));
-    //     sendResponse(0xCCCC, 0xCCCC, ledState, sizeof(ledState));
+    ledState[key * 2] = state;
+    ledState[key * 2 + 1] = state;
 }
 
-void TouchModule::functionRunner(uint8_t page, uint16_t key)
+void TouchModule::setSeparateLedState(uint16_t key, bool state)
+{
+    ledState[key] = state;
+}
+
+void TouchModule::functionRunner(uint16_t key)
 {
     if (functionRunnerState_.active)
         return;
 
-    uint16_t L = getLogicalButton(key);
-    uint16_t P = getPhysicalButton(key);
+    uint16_t merged = getMergedButton(key);
+    uint16_t separate = getSplitButton(key);
 
-    uint8_t keyType = switchPanel_.getKeyType(L);
+    uint8_t keyType = switchPanel_.getKeyType(merged);
 
-    uint8_t functionStart = 0;
-    uint8_t functionCount = 0;
+    using SwitchType = SwitchPanel::SwitchType;
 
-    // ---------------------------------------------------------
-    // LED
-    // ---------------------------------------------------------
-
-    const uint8_t ledAddress = ((page - 1) * 8) + key;
-
-    switch (keyType)
+    const auto isType = [keyType](SwitchType type)
     {
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::SingleON):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::SingleOFF):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::SingleONOFF):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationON):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationOFF):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationONOFF):
-        ledState[ledAddress] = !ledState[ledAddress];
+        return keyType == static_cast<uint8_t>(type);
+    };
 
-        // Toggle its paired LED
-        uint8_t pairedAddress;
+    bool isMerge = true;
+    bool state = false;
+    uint8_t functionEnd = 1;
 
-        if ((ledAddress % 2) == 0)
-            pairedAddress = ledAddress + 1;
-        else
-            pairedAddress = ledAddress - 1;
-
-        ledState[pairedAddress] = !ledState[pairedAddress];
-
+    switch (static_cast<SwitchType>(keyType))
+    {
+    case SwitchType::SingleON:
+    case SwitchType::CombinationON:
+        state = true;
+        functionEnd = isType(SwitchType::CombinationON) ? 50 : 1;
         break;
 
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::DblclickCombined):
-        ledState[ledAddress] = !ledState[ledAddress];
+    case SwitchType::SingleOFF:
+    case SwitchType::CombinationOFF:
+        state = false;
+        functionEnd = isType(SwitchType::CombinationOFF) ? 50 : 1;
         break;
 
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::DblclickSingle):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::ShortLongPress):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::ShortLongJog):
-        ledState[ledAddress] = !ledState[ledAddress];
+    case SwitchType::SingleONOFF:
+    case SwitchType::CombinationONOFF:
+        state = !ledState[merged * 2];
+        functionEnd = isType(SwitchType::CombinationONOFF) ? 50 : 1;
         break;
 
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::Invalid):
-        ledState[ledAddress] = 0x00;
-        return;
+    case SwitchType::DblclickSingle:
+        state = !ledState[separate];
+        functionEnd = 1;
 
+        isMerge = false;
+        break;
+
+    case SwitchType::DblclickCombined:
+    case SwitchType::ShortLongPress:
+    case SwitchType::ShortLongJog:
+        state = true;
+        functionEnd = 50;
+
+        isMerge = false;
+        break;
+
+    case SwitchType::Invalid:
     default:
+        ledState[merged * 2] = 0;
+        ledState[merged * 2 + 1] = 0;
         return;
     }
 
-    // ---------------------------------------------------------
-    // Function
-    // ---------------------------------------------------------
-
-    switch (keyType)
+    if (isMerge)
     {
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::SingleON):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::SingleOFF):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::SingleONOFF):
-        functionCount = 1;
-        functionStart = 0;
-        break;
+        ledState[merged * 2] = !ledState[merged * 2];
+        ledState[merged * 2 + 1] = !ledState[merged * 2 + 1];
 
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationON):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationOFF):
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationONOFF):
-        functionCount = 99;
-        functionStart = 0;
-        break;
-
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::DblclickCombined):
-        functionCount = 50;
-        functionStart = (P & 1) ? 0 : 50;
-        break;
-
-    case static_cast<uint8_t>(SwitchPanel::SwitchType::DblclickSingle):
-        functionCount = (P & 1) ? 1 : 50;
-        functionStart = (P & 1) ? 0 : 50;
-        break;
-
-    default:
-        return;
+        buzzer_.click();
+    }
+    else
+    {
+        ledState[separate] = !ledState[separate];
+        buzzer_.click();
     }
 
     // ---------------------------------------------------------
     // Function runner state
     // ---------------------------------------------------------
 
-    const uint8_t ledChannel = static_cast<uint8_t>(P) - 1;
+    functionRunnerState_.isMerge = isMerge;
+    functionRunnerState_.keyNumber = isMerge ? merged : separate;
+    functionRunnerState_.state = state;
+    functionRunnerState_.keyType = keyType;
+    functionRunnerState_.functionEnd = functionEnd;
 
     functionRunnerState_.active = true;
     functionRunnerState_.functionExecuting = false;
+    functionRunnerState_.functionIndex = 1;
 
-    functionRunnerState_.page = page;
-    functionRunnerState_.key = key;
+    uint8_t payload[5];
 
-    functionRunnerState_.logicalButton = L;
-    functionRunnerState_.physicalButton = P;
+    payload[0] = functionRunnerState_.isMerge;
+    payload[1] = functionRunnerState_.keyNumber;
+    payload[2] = functionRunnerState_.state;
+    payload[3] = functionRunnerState_.keyType;
+    payload[4] = functionRunnerState_.functionEnd;
 
-    functionRunnerState_.ledChannel = ledChannel;
-
-    functionRunnerState_.functionIndex = functionStart;
-    functionRunnerState_.functionEnd = functionStart + functionCount;
+    sendResponse(0xDDDD, 0xDDDD, payload, sizeof(payload));
 }
 
 void TouchModule::updateFunctionRunner()
@@ -538,145 +490,138 @@ void TouchModule::updateFunctionRunner()
     if (!functionRunnerState_.active)
         return;
 
+    // Waiting for the previous function's response: don't send the next one yet
+    if (functionRunnerState_.waitingConfirm)
+    {
+        if (millis() - functionRunnerState_.confirmStart <= FunctionRunnerState::TRY_WINDOW_MS)
+            return; // still inside this try's window
+
+        if (functionRunnerState_.tries < FunctionRunnerState::MAX_TRIES)
+        {
+            // no response: send the same packet again
+            functionRunnerState_.tries++;
+            functionRunnerState_.confirmStart = millis();
+            sendResponse(functionRunnerState_.pendingOp,
+                         functionRunnerState_.pendingDst,
+                         functionRunnerState_.pendingPacket.data,
+                         functionRunnerState_.pendingPacket.size);
+            return;
+        }
+
+        // 3 tries used, give up on this function and move on
+        functionRunnerState_.waitingConfirm = false;
+    }
+
     uint8_t processed = 0;
 
-    while (
-        functionRunnerState_.functionIndex <
-            functionRunnerState_.functionEnd &&
-        processed < functionRunnerState_.functionsPerUpdate)
+    while (functionRunnerState_.functionIndex <= functionRunnerState_.functionEnd &&
+           processed < functionRunnerState_.functionsPerUpdate)
     {
-        uint8_t functionIndex =
-            functionRunnerState_.functionIndex++;
+        const uint8_t functionIndex = functionRunnerState_.functionIndex++;
 
         uint8_t function[7];
 
-        flash_.read(
-            flash_.findAdrress(
-                MemoryAdress::Touch::SECTOR_FUNCTIONS,
-                MemoryAdress::Touch::channelFunction(
-                    functionRunnerState_.logicalButton,
-                    functionIndex)),
-            function,
-            sizeof(function));
+        // Resolve storage key and half
+        const uint8_t storageKey = functionRunnerState_.isMerge
+                                       ? static_cast<uint8_t>(functionRunnerState_.keyNumber + 1)
+                                       : static_cast<uint8_t>(functionRunnerState_.keyNumber / 2 + 1);
+
+        const uint8_t half = functionRunnerState_.isMerge
+                                 ? 0
+                                 : static_cast<uint8_t>(functionRunnerState_.keyNumber % 2);
+
+        // Get address for function index 0–49 within the selected half
+        const uint32_t address = KeyStorageLayout::functionAddress(
+            storageKey,
+            half ? functionIndex + 49 : functionIndex);
+
+        if (address == UINT32_MAX)
+            continue;
+
+        // Read the complete 7-byte function record
+        if (!flash_.read(address, function, sizeof(function)))
+            continue;
 
         processed++;
 
-        // ---------------------------------------------------------
         // Invalid / unused function
-        // ---------------------------------------------------------
-
         if (function[0] == 0xFF || function[0] == static_cast<uint8_t>(SwitchPanel::OperationType::Invalid))
         {
-            continue;
+            break;
         }
 
-        // ---------------------------------------------------------
-        // Destination
-        // ---------------------------------------------------------
-
-        uint16_t dstAddress = (static_cast<uint16_t>(function[1]) << 8) | function[2];
-
-        // ---------------------------------------------------------
-        // Operation information
-        // ---------------------------------------------------------
-
-        uint16_t oprCode = switchPanel_.getOperationCode(function[0]);
+        // uint16_t dstAddress = (static_cast<uint16_t>(function[1]) << 8) | function[2];
+        // uint16_t oprCode = switchPanel_.getOperationCode(function[0]);
 
         SwitchPanel::FunctionPacket spacket{};
+        spacket.size = switchPanel_.makeFunction(spacket, functionRunnerState_.keyType, functionRunnerState_.state, function);
 
-        spacket.size = switchPanel_.makeFunction(spacket, functionRunnerState_.key, leds_.getLedMode(functionRunnerState_.key), function);
+        // sendResponse(0xCCCC, 0xCCCC, function, sizeof(function));
+        // sendResponse(0xCCCC, 0xCCCC, spacket.data, spacket.size);
 
-        if (spacket.size == 0)
+        if (spacket.size == UINT16_MAX)
             continue;
 
-        // ---------------------------------------------------------
-        // First valid function
-        // ---------------------------------------------------------
+        // // First valid function: start LED indication
+        // if (!functionRunnerState_.functionExecuting)
+        // {
+        //     functionRunnerState_.functionExecuting = true;
 
-        if (!functionRunnerState_.functionExecuting)
-        {
-            functionRunnerState_.functionExecuting = true;
+        //     if (functionRunnerState_.isMerge)
+        //     {
+        //         uint8_t merged = functionRunnerState_.keyNumber;
 
-            // Start LED indication
-            if (functionRunnerState_.ledChannel < TOUCH_PAD_COUNT)
-            {
-                leds_.setLedMode(
-                    functionRunnerState_.ledChannel,
-                    LedHandler<TOUCH_PAD_COUNT>::LedMode::Blinking);
-            }
+        //         ledState[(merged * 2)] = 0x02;
+        //         ledState[(merged * 2) + 1] = 0x02;
+        //     }
+        //     else
+        //     {
+        //         uint8_t separate = functionRunnerState_.keyNumber;
 
-            // DblclickCombined uses the paired LED too
-            if (
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::SingleON) ||
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::SingleOFF) ||
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::SingleONOFF) ||
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationON) ||
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationOFF) ||
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationONOFF))
-            {
-                uint8_t pairedAddress;
+        //         ledState[separate] = 0x02;
+        //     }
+        // }
 
-                if ((functionRunnerState_.ledChannel % 2) == 0)
-                    pairedAddress = functionRunnerState_.ledChannel + 1;
-                else
-                    pairedAddress = functionRunnerState_.ledChannel - 1;
+        // Execute: first try
+        functionRunnerState_.pendingOp = spacket.oprCode;
+        functionRunnerState_.pendingDst = spacket.dstAddress;
+        functionRunnerState_.pendingPacket = spacket;
+        functionRunnerState_.tries = 1;
 
-                if (pairedAddress < TOUCH_PAD_COUNT)
-                {
-                    leds_.setLedMode(
-                        pairedAddress,
-                        LedHandler<TOUCH_PAD_COUNT>::LedMode::Blinking);
-                }
-            }
-        }
+        sendConfirm(spacket);
 
-        // ---------------------------------------------------------
-        // Execute
-        // ---------------------------------------------------------
+        // functionRunnerState_.expSrc = dstAddress;
+        // functionRunnerState_.expOp = oprCode + 1;
+        // functionRunnerState_.confirmStart = millis();
+        // functionRunnerState_.waitingConfirm = true;
 
-        sendConfirm(oprCode, dstAddress, spacket.data, spacket.size);
+        return; // the finish block runs on a later call, after confirm or timeout
     }
 
-    // -------------------------------------------------------------
     // Finished
-    // -------------------------------------------------------------
-
-    if (functionRunnerState_.functionIndex >=
-        functionRunnerState_.functionEnd)
+    if (functionRunnerState_.functionIndex >= functionRunnerState_.functionEnd)
     {
+
         if (functionRunnerState_.functionExecuting)
         {
-            if (functionRunnerState_.ledChannel < TOUCH_PAD_COUNT)
+            if (functionRunnerState_.isMerge)
             {
-                leds_.finishOperation(
-                    functionRunnerState_.ledChannel);
+                uint8_t merged = functionRunnerState_.keyNumber;
+
+                ledState[(merged * 2)] = 0x00;
+                ledState[(merged * 2) + 1] = 0x00;
             }
-
-            // Finish paired LED for DblclickCombined
-            if (
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::SingleON) ||
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::SingleOFF) ||
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::SingleONOFF) ||
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationON) ||
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationOFF) ||
-                functionRunnerState_.key == static_cast<uint8_t>(SwitchPanel::SwitchType::CombinationONOFF))
+            else
             {
-                uint8_t pairedAddress;
+                uint8_t separate = functionRunnerState_.keyNumber;
 
-                if ((functionRunnerState_.ledChannel % 2) == 0)
-                    pairedAddress = functionRunnerState_.ledChannel + 1;
-                else
-                    pairedAddress = functionRunnerState_.ledChannel - 1;
-
-                if (pairedAddress < TOUCH_PAD_COUNT)
-                {
-                    leds_.finishOperation(pairedAddress);
-                }
+                ledState[separate] = 0x00;
             }
         }
 
         functionRunnerState_.active = false;
         functionRunnerState_.functionExecuting = false;
+        functionRunnerState_.waitingConfirm = false;
     }
 }
 
@@ -745,8 +690,8 @@ bool TouchModule::init()
     // uint8_t fuid_[12];
     // flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_MAC_ADDRESS), fuid_, sizeof(fuid_));
 
-    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_REMARK), "Zeller Z27", 20);
-    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_HARDWARE_VER), "STM3F103RB", 30);
+    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_REMARK), FACTORY_NAME, 20);
+    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_HARDWARE_VER), HARDWARE_VERSION, 30);
     flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_SOFTWARE_VER), SOFTWARE_VERSION, 20);
 
     uint8_t value[8] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -759,7 +704,7 @@ bool TouchModule::init()
     for (size_t i = 1; i <= LOGICAL_BUTTON_COUNT; i++)
     {
         snprintf(remark, sizeof(remark), "Button %d", static_cast<unsigned>(i));
-        flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::channelRemark(i)), remark, sizeof(remark));
+        flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::setRemark(MemoryAdress::CHANNEL_REMARK, i)), remark, sizeof(remark));
 
         uint8_t mode = static_cast<uint8_t>(SwitchPanel::SwitchType::Invalid);
 
@@ -794,48 +739,58 @@ bool TouchModule::syncValues()
 
 void TouchModule::updateAPDS()
 {
-    apds_.update();
-
-    uint16_t prox = apds_.getProximity();
-
-    if (prox > 800)
+#ifdef HAS_APDS
+    if (deviceMode_ == DeviceMode::Sleep)
     {
-        if (deviceMode_ == DeviceMode::Sleep)
-        {
+        if (!apds_.irqPending())
+            return;     // nothing happened, no I2C
+        apds_.update(); // reads data and clears INT
+        if (apds_.isNear())
             wake();
-        }
-        if (deviceMode_ == DeviceMode::Wake)
-        {
-            markActivity();
-        }
+        return;
     }
+
+    apds_.update(); // wake mode: polling
+    if (apds_.isNear())
+        markActivity();
+#endif
 }
+#ifdef HAS_APDS
+void TouchModule::irqProxHandler()
+{
+    apds_.irq();
+    markActivity();
+}
+bool TouchModule::getProxIrq()
+{
+    return apds_.irqPending();
+}
+#endif
 
 void TouchModule::irqTouchHandler()
 {
     touch_.irq();
     markActivity();
 }
-
-bool TouchModule::getIrq()
+bool TouchModule::getTouchIrq()
 {
     return touch_.irqPending();
 }
 
-uint8_t TouchModule::getPhysicalButton(uint8_t key)
+uint8_t TouchModule::getSplitButton(uint8_t key)
 {
     if (key >= 8)
         return 0;
 
-    return key + 1 + ((display_.getPage() - 1) * 8);
+    return key + ((display_.getPage() - 1) * 8);
 }
 
-uint8_t TouchModule::getLogicalButton(uint8_t key)
+uint8_t TouchModule::getMergedButton(uint8_t key)
 {
     if (key >= 8)
         return 0;
 
-    return (key / 2) + 1 + ((display_.getPage() - 1) * 4);
+    return (key / 2) + ((display_.getPage() - 1) * 4);
 }
 
 void TouchModule::checkAutoSleep()
@@ -851,6 +806,9 @@ void TouchModule::sleep()
     deviceMode_ = DeviceMode::Sleep;
     leds_.sleep();
     display_.sleep();
+    // #ifdef HAS_APDS
+    //     apds_.armProximityInterrupt();
+    // #endif
 }
 
 void TouchModule::wake()
@@ -860,6 +818,9 @@ void TouchModule::wake()
     display_.wake();
 
     markActivity(); // waking counts as activity — restart the idle timer
+    // #ifdef HAS_APDS
+    //     apds_.disarmProximityInterrupt();
+    // #endif
 }
 
 // LED indicator logic (mode state machine + software PWM) now lives entirely
@@ -868,8 +829,17 @@ void TouchModule::wake()
 
 void TouchModule::process(const BusproFrame &frame)
 {
+    if (functionRunnerState_.waitingConfirm &&
+        frame.srcAddress == functionRunnerState_.expSrc &&
+        frame.opCode == functionRunnerState_.expOp)
+    {
+        functionRunnerState_.waitingConfirm = false;
+    }
+
     // if (frame.devType != devType_)
     //     return;
+    if (frame.srcAddress == deviceAddress_)
+        return;
 
     if (frame.dstAddress == 0xFFFF) // universal comands
     {
@@ -1148,7 +1118,11 @@ void TouchModule::process(const BusproFrame &frame)
 
             // case BusproOp::SCENE_CONTROL.resp():
             //     break;
+        default:
+            break;
         }
+
+        return;
     }
 }
 
@@ -1158,35 +1132,14 @@ void TouchModule::sendResponse(uint16_t opcode, uint16_t dst, const uint8_t *pay
     bus_.send(deviceAddress_, devType_, opcode, dst, payload, payloadLen);
 }
 
-bool TouchModule::sendConfirm(uint16_t opcode, uint16_t dst, const uint8_t *payload, uint8_t payloadLen)
+void TouchModule::sendConfirm(SwitchPanel::FunctionPacket packet)
 {
-    constexpr uint8_t MAX_RETRIES = 1;
-    constexpr uint32_t TIMEOUT = 100;
+    bus_.send(deviceAddress_, devType_, packet.oprCode, packet.dstAddress, packet.data, packet.size);
 
-    const uint16_t expectedOpcode = opcode + 1;
-    const uint16_t expectedAddress = dst;
-
-    for (uint8_t attempt = 0; attempt < MAX_RETRIES; attempt++)
-    {
-        bus_.send(deviceAddress_, devType_, opcode, dst, payload, payloadLen);
-
-        const uint32_t start = millis();
-
-        while (millis() - start < TIMEOUT)
-        {
-            BusproFrame frame;
-            if (bus_.poll(frame))
-            {
-                if (frame.srcAddress == expectedAddress &&
-                    frame.opCode == expectedOpcode)
-                {
-                    return true;
-                }
-            }
-        }
-    }
-
-    return false;
+    functionRunnerState_.expSrc = packet.dstAddress;
+    functionRunnerState_.expOp = packet.oprCode + 1;
+    functionRunnerState_.confirmStart = millis();
+    functionRunnerState_.waitingConfirm = true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1522,7 +1475,12 @@ void TouchModule::handleReadTouchFunction(const BusproFrame &frame)
 
     uint8_t payload[9];
 
-    switchPanel_.getKeyFunction(payload, frame.payload[0], frame.payload[1]);
+    payload[0] = frame.payload[0]; // key
+    payload[1] = frame.payload[1]; // function
+
+    uint32_t address = KeyStorageLayout::functionAddress(frame.payload[0], frame.payload[1]);
+
+    flash_.read(address, payload + 2, 7);
 
     sendResponse(BusproOp::Touch::CHANNEL_FUNCTION.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1531,10 +1489,16 @@ void TouchModule::handleModifyTouchFunction(const BusproFrame &frame)
     if (frame.payloadLen != 9)
         return;
 
-    uint8_t payload[9];
-    memcpy(payload, frame.payload, sizeof(payload));
+    uint32_t address = KeyStorageLayout::functionAddress(frame.payload[0], frame.payload[1]);
 
-    switchPanel_.setKeyFunction(payload, frame.payload[0], frame.payload[1]);
+    flash_.update(address, frame.payload + 2, 7);
+
+    uint8_t payload[9];
+
+    payload[0] = frame.payload[0];
+    payload[1] = frame.payload[1];
+
+    flash_.read(address, payload + 2, 7);
 
     sendResponse(BusproOp::Touch::CHANNEL_FUNCTION.writeResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1550,7 +1514,7 @@ void TouchModule::handleReadTouchRemark(const BusproFrame &frame)
 
     uint8_t payload[21] = {touchNum};
 
-    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::channelRemark(touchNum)), payload + 1, 20);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::setRemark(MemoryAdress::CHANNEL_REMARK, touchNum)), payload + 1, 20);
 
     sendResponse(BusproOp::Touch::CHANNEL_REMARK.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1563,7 +1527,7 @@ void TouchModule::handleModifyTouchRemark(const BusproFrame &frame)
 
     uint8_t payload[21] = {touchNum};
 
-    flash_.update(flash_.findAdrress(memoryaddress_, MemoryAdress::channelRemark(touchNum)), frame.payload + 1, 20);
+    flash_.update(flash_.findAdrress(memoryaddress_, MemoryAdress::setRemark(MemoryAdress::CHANNEL_REMARK, touchNum)), frame.payload + 1, 20);
 
     sendResponse(BusproOp::Touch::CHANNEL_REMARK.writeResp(), frame.srcAddress, payload, sizeof(payload));
 }

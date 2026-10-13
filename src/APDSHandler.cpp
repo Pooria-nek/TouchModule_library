@@ -9,6 +9,7 @@ APDSHandler::APDSHandler(TwoWire &wirePort)
       irqFlag_(false),
       lastProximity_(0),
       lastLux_(0),
+      ambientGain_(DEFAULT_AGAIN),
       proximityFarThreshold_(500),
       proximityNearThreshold_(700),
       proximityNear_(false),
@@ -27,148 +28,153 @@ APDSHandler::~APDSHandler()
 }
 
 /**
- * @brief Configures I2C communications and initializes registers to defaults
+ * @brief Configures I2C communications and initializes registers to defaults.
+ *        All functions are left disabled; call enableProximitySensor() /
+ *        enableLightSensor() afterwards.
  *
  * @return True if initialized successfully. False otherwise.
  */
-bool APDSHandler::init()
+bool APDSHandler::begin()
 {
     uint8_t id;
 
     /* Initialize I2C */
-    wire_.begin();
+    // wire_.begin();
 
-    /* Read ID register and check against known values for APDS-9930 */
+    // Read and verify APDS-9930 ID
     if (!wireReadDataByte(APDS9930_ID, id))
-    {
         return false;
-    }
-    if (!(id == APDS9930_ID_1 || id == APDS9930_ID_2))
-    {
-        return false;
-    }
 
-    /* Set ENABLE register to 0 (disable all features) */
-    if (!setMode(ALL, ON))
-    {
+    if (id != APDS9930_ID_1 && id != APDS9930_ID_2)
         return false;
-    }
+
+    // Disable all sensor functions before configuration
+    if (!setMode(ALL, OFF))
+        return false;
 
     if (!wireWriteDataByte(APDS9930_PTIME, DEFAULT_PTIME))
-    {
         return false;
-    }
 
-    /* Set default values for ambient light and proximity registers */
     if (!wireWriteDataByte(APDS9930_ATIME, DEFAULT_ATIME))
-    {
         return false;
-    }
+
     if (!wireWriteDataByte(APDS9930_WTIME, DEFAULT_WTIME))
-    {
         return false;
-    }
+
     if (!wireWriteDataByte(APDS9930_PPULSE, DEFAULT_PPULSE))
-    {
         return false;
-    }
+
     if (!wireWriteDataByte(APDS9930_POFFSET, DEFAULT_POFFSET))
-    {
         return false;
-    }
+
     if (!wireWriteDataByte(APDS9930_CONFIG, DEFAULT_CONFIG))
-    {
         return false;
-    }
+
     if (!setLEDDrive(DEFAULT_PDRIVE))
-    {
         return false;
-    }
+
     if (!setProximityGain(DEFAULT_PGAIN))
-    {
         return false;
-    }
+
     if (!setAmbientLightGain(DEFAULT_AGAIN))
-    {
         return false;
-    }
+
     if (!setProximityDiode(DEFAULT_PDIODE))
-    {
         return false;
-    }
+
+    // Configure proximity interrupt thresholds
     if (!setProximityIntLowThreshold(DEFAULT_PILT))
-    {
         return false;
-    }
-    if (!setProximityIntHighThreshold(DEFAULT_PIHT))
-    {
+
+    if (!setProximityIntHighThreshold(proximityNearThreshold_))
         return false;
-    }
-    // if (!setLightIntLowThreshold(DEFAULT_AILT))
-    // {
-    //     return false;
-    // }
-    // if (!setLightIntHighThreshold(DEFAULT_AIHT))
-    // {
-    //     return false;
-    // }
+
+    // Configure interrupt persistence
     if (!wireWriteDataByte(APDS9930_PERS, DEFAULT_PERS))
-    {
         return false;
-    }
+
+    // Enable proximity only:
+    // PON  = bit 0 (power on)
+    // PEN  = bit 2 (proximity engine)
+    // PIEN = bit 5 (proximity interrupt)
+    // AIEN remains disabled.
+    if (!wireWriteDataByte(APDS9930_ENABLE, 0x25))
+        return false;
 
     return true;
 }
 
-void APDSHandler::irqHandler()
+bool APDSHandler::armProximityInterrupt()
 {
-    irqFlag_ = true;
+    irqFlag_ = false;
+    if (!clearAllInts()) // drop any stale latched INT first
+        return false;
+    return setProximityIntEnable(1);
+}
+
+bool APDSHandler::disarmProximityInterrupt()
+{
+    bool ok = setProximityIntEnable(0);
+    ok = clearAllInts() && ok;
+    irqFlag_ = false;
+    return ok;
 }
 
 void APDSHandler::update()
 {
+    uint16_t ch0;
+    uint16_t ch1;
     uint16_t prox;
-    unsigned long lux;
 
     /*
-     * Read proximity
+     * One atomic burst read of Ch0, Ch1 and proximity.
+     * On failure keep the previous state (and keep the IRQ flag pending).
      */
-    if (readProximity(prox))
+    if (!readSensorData(ch0, ch1, prox))
     {
-        lastProximity_ = prox;
-
-        /*
-         * Hysteresis:
-         *
-         * FAR -> NEAR only above near threshold
-         * NEAR -> FAR only below far threshold
-         */
-        if (!proximityNear_ &&
-            lastProximity_ >= proximityNearThreshold_)
-        {
-            proximityNear_ = true;
-        }
-        else if (proximityNear_ &&
-                 lastProximity_ <= proximityFarThreshold_)
-        {
-            proximityNear_ = false;
-        }
+        return;
     }
 
+    lastProximity_ = prox;
+
     /*
-     * Read ambient light
+     * Hysteresis:
+     *
+     * FAR -> NEAR only above near threshold
+     * NEAR -> FAR only below far threshold
      */
-    if (readAmbientLightLux(lux))
+    if (!proximityNear_ &&
+        lastProximity_ >= proximityNearThreshold_)
     {
-        lastLux_ = lux;
+        proximityNear_ = true;
+    }
+    else if (proximityNear_ &&
+             lastProximity_ <= proximityFarThreshold_)
+    {
+        proximityNear_ = false;
+    }
+
+    lastLux_ = ulongAmbientToLux(ch0, ch1);
+
+    /*
+     * Service a pending interrupt: the chip keeps INT asserted until
+     * a special-function clear command is written.
+     */
+    if (irqFlag_)
+    {
+        irqFlag_ = false;
+        if (!clearAllInts())
+        {
+            irqFlag_ = true; /* retry on next update() */
+        }
     }
 }
 
-void APDSHandler::setProximityThresholds(uint16_t farThreshold,
+bool APDSHandler::setProximityThresholds(uint16_t farThreshold,
                                          uint16_t nearThreshold)
 {
     if (farThreshold >= nearThreshold)
-        return;
+        return false;
 
     proximityFarThreshold_ = farThreshold;
     proximityNearThreshold_ = nearThreshold;
@@ -184,6 +190,11 @@ void APDSHandler::setProximityThresholds(uint16_t farThreshold,
     {
         proximityNear_ = false;
     }
+
+    /*
+     * Keep the hardware interrupt threshold in sync with the NEAR threshold.
+     */
+    return setProximityIntHighThreshold(proximityNearThreshold_);
 }
 
 bool APDSHandler::isNear() const
@@ -207,7 +218,7 @@ uint16_t APDSHandler::getProximityFarThreshold() const
 }
 
 void APDSHandler::setLightThresholds(unsigned long darkThreshold,
-                                      unsigned long brightThreshold)
+                                     unsigned long brightThreshold)
 {
     if (darkThreshold >= brightThreshold)
         return;
@@ -237,7 +248,7 @@ unsigned long APDSHandler::getBrightThreshold() const
 }
 
 void APDSHandler::setBrightnessRange(uint8_t minBrightness,
-                                      uint8_t maxBrightness)
+                                     uint8_t maxBrightness)
 {
     if (minBrightness > 100)
         minBrightness = 100;
@@ -275,7 +286,7 @@ uint8_t APDSHandler::getAutoBrightness() const
 
     return minBrightness_ +
            (uint32_t(luxPosition) * brightnessRange) /
-           luxRange;
+               luxRange;
 }
 
 uint16_t APDSHandler::getProximity()
@@ -363,124 +374,97 @@ bool APDSHandler::setMode(uint8_t mode, uint8_t enable)
 }
 
 /**
- * @brief Starts the light (Ambient/IR) sensor on the APDS-9930
+ * @brief Enables/disables one sensor with a single ENABLE register
+ *        read-modify-write. Enabling also sets PON.
  *
- * @param[in] interrupts true to enable hardware interrupt on high or low light
- * @return True if sensor enabled correctly. False on error.
+ * @param[in] enBit   sensor enable bit (APDS9930_AEN / APDS9930_PEN)
+ * @param[in] intBit  its interrupt enable bit (APDS9930_AIEN / APDS9930_PIEN)
+ * @param[in] enable  true to enable, false to disable
+ * @param[in] interrupts true to also enable the hardware interrupt
+ * @return True if successful. False on error.
  */
+bool APDSHandler::setSensor(uint8_t enBit, uint8_t intBit,
+                            bool enable, bool interrupts)
+{
+    uint8_t reg = getMode();
+    if (reg == ERROR)
+    {
+        return false;
+    }
+
+    if (enable)
+    {
+        reg |= (APDS9930_PON | enBit);
+        if (interrupts)
+        {
+            reg |= intBit;
+        }
+        else
+        {
+            reg &= (uint8_t)~intBit;
+        }
+    }
+    else
+    {
+        reg &= (uint8_t)~(enBit | intBit);
+    }
+
+    return wireWriteDataByte(APDS9930_ENABLE, reg);
+}
+
+/**
+ * @brief Starts or stops the proximity sensor
+ *
+ * @param[in] enable true to start, false to stop
+ * @param[in] interrupts true to enable hardware interrupt on proximity
+ * @return True if successful. False on error.
+ */
+bool APDSHandler::setProximitySensor(bool enable, bool interrupts)
+{
+    if (enable &&
+        (!setProximityGain(DEFAULT_PGAIN) || !setLEDDrive(DEFAULT_PDRIVE)))
+    {
+        return false;
+    }
+
+    return setSensor(APDS9930_PEN, APDS9930_PIEN, enable, interrupts);
+}
+
+/**
+ * @brief Starts or stops the light (Ambient/IR) sensor
+ *
+ * @param[in] enable true to start, false to stop
+ * @param[in] interrupts true to enable hardware interrupt on high or low light
+ * @return True if successful. False on error.
+ */
+bool APDSHandler::setLightSensor(bool enable, bool interrupts)
+{
+    if (enable && !setAmbientLightGain(DEFAULT_AGAIN))
+    {
+        return false;
+    }
+
+    return setSensor(APDS9930_AEN, APDS9930_AIEN, enable, interrupts);
+}
+
 bool APDSHandler::enableLightSensor(bool interrupts)
 {
-
-    /* Set default gain, interrupts, enable power, and enable sensor */
-    if (!setAmbientLightGain(DEFAULT_AGAIN))
-    {
-        return false;
-    }
-    if (interrupts)
-    {
-        if (!setAmbientLightIntEnable(1))
-        {
-            return false;
-        }
-    }
-    else
-    {
-        if (!setAmbientLightIntEnable(0))
-        {
-            return false;
-        }
-    }
-    if (!enablePower())
-    {
-        return false;
-    }
-    if (!setMode(AMBIENT_LIGHT, 1))
-    {
-        return false;
-    }
-
-    return true;
+    return setLightSensor(true, interrupts);
 }
 
-/**
- * @brief Ends the light sensor on the APDS-9930
- *
- * @return True if sensor disabled correctly. False on error.
- */
 bool APDSHandler::disableLightSensor()
 {
-    if (!setAmbientLightIntEnable(0))
-    {
-        return false;
-    }
-    if (!setMode(AMBIENT_LIGHT, 0))
-    {
-        return false;
-    }
-
-    return true;
+    return setLightSensor(false);
 }
 
-/**
- * @brief Starts the proximity sensor on the APDS-9930
- *
- * @param[in] interrupts true to enable hardware external interrupt on proximity
- * @return True if sensor enabled correctly. False on error.
- */
 bool APDSHandler::enableProximitySensor(bool interrupts)
 {
-    /* Set default gain, LED, interrupts, enable power, and enable sensor */
-    if (!setProximityGain(DEFAULT_PGAIN))
-    {
-        return false;
-    }
-    if (!setLEDDrive(DEFAULT_PDRIVE))
-    {
-        return false;
-    }
-    if (interrupts)
-    {
-        if (!setProximityIntEnable(1))
-        {
-            return false;
-        }
-    }
-    else
-    {
-        if (!setProximityIntEnable(0))
-        {
-            return false;
-        }
-    }
-    if (!enablePower())
-    {
-        return false;
-    }
-    if (!setMode(PROXIMITY, 1))
-    {
-        return false;
-    }
-
-    return true;
+    return setProximitySensor(true, interrupts);
 }
 
-/**
- * @brief Ends the proximity sensor on the APDS-9930
- *
- * @return True if sensor disabled correctly. False on error.
- */
 bool APDSHandler::disableProximitySensor()
 {
-    if (!setProximityIntEnable(0))
-    {
-        return false;
-    }
-    if (!setMode(PROXIMITY, 0))
-    {
-        return false;
-    }
-
-    return true;
+    return setProximitySensor(false);
 }
 
 /**
@@ -519,20 +503,16 @@ bool APDSHandler::disablePower()
 
 bool APDSHandler::readAmbientLightLux(unsigned long &val)
 {
-    uint16_t Ch0;
-    uint16_t Ch1;
+    uint8_t buf[4];
 
-    /* Read value from channel 0 */
-    if (!readCh0Light(Ch0))
+    /* Ch0 and Ch1 in one atomic burst (0x14..0x17) */
+    if (wireReadDataBlock(APDS9930_Ch0DATAL, buf, 4) != 4)
     {
         return false;
     }
 
-    /* Read value from channel 1 */
-    if (!readCh1Light(Ch1))
-    {
-        return false;
-    }
+    const uint16_t Ch0 = (uint16_t)buf[0] | ((uint16_t)buf[1] << 8);
+    const uint16_t Ch1 = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
 
     val = ulongAmbientToLux(Ch0, Ch1);
     return true;
@@ -540,64 +520,34 @@ bool APDSHandler::readAmbientLightLux(unsigned long &val)
 
 float APDSHandler::floatAmbientToLux(uint16_t Ch0, uint16_t Ch1)
 {
-    uint8_t x[4] = {1, 8, 16, 120};
-    float ALSIT = 2.73 * (256 - DEFAULT_ATIME);
-    float iac = max(Ch0 - ALS_B * Ch1, ALS_C * Ch0 - ALS_D * Ch1);
+    static const uint8_t x[4] = {1, 8, 16, 120};
+
+    const float ALSIT = 2.73f * (256 - DEFAULT_ATIME);
+    const float a = (float)Ch0 - ALS_B * (float)Ch1;
+    const float b = ALS_C * (float)Ch0 - ALS_D * (float)Ch1;
+    float iac = (a > b) ? a : b;
+
     if (iac < 0)
         iac = 0;
-    float lpc = GA * DF / (ALSIT * x[getAmbientLightGain()]);
+
+    /* Cached gain: no I2C access and no way to index out of bounds */
+    const float lpc = GA * DF / (ALSIT * x[ambientGain_ & 0x03]);
     return iac * lpc;
 }
 
 unsigned long APDSHandler::ulongAmbientToLux(uint16_t Ch0, uint16_t Ch1)
 {
-    uint8_t x[4] = {1, 8, 16, 120};
-    float ALSIT = 2.73f * (256 - DEFAULT_ATIME);
-    float iac = max(Ch0 - ALS_B * Ch1, ALS_C * Ch0 - ALS_D * Ch1);
-
-    if (iac < 0)
-        iac = 0;
-
-    float lpc = GA * DF / (ALSIT * x[getAmbientLightGain()]);
-    return (unsigned long)(iac * lpc);
+    return (unsigned long)floatAmbientToLux(Ch0, Ch1);
 }
 
 bool APDSHandler::readCh0Light(uint16_t &val)
 {
-    uint8_t val_byte;
-    val = 0;
-
-    /* Read value from channel 0 */
-    if (!wireReadDataByte(APDS9930_Ch0DATAL, val_byte))
-    {
-        return false;
-    }
-    val = val_byte;
-    if (!wireReadDataByte(APDS9930_Ch0DATAH, val_byte))
-    {
-        return false;
-    }
-    val += ((uint16_t)val_byte << 8);
-    return true;
+    return readWord(APDS9930_Ch0DATAL, val);
 }
 
 bool APDSHandler::readCh1Light(uint16_t &val)
 {
-    uint8_t val_byte;
-    val = 0;
-
-    /* Read value from channel 0 */
-    if (!wireReadDataByte(APDS9930_Ch1DATAL, val_byte))
-    {
-        return false;
-    }
-    val = val_byte;
-    if (!wireReadDataByte(APDS9930_Ch1DATAH, val_byte))
-    {
-        return false;
-    }
-    val += ((uint16_t)val_byte << 8);
-    return true;
+    return readWord(APDS9930_Ch1DATAL, val);
 }
 
 /*******************************************************************************
@@ -605,29 +555,14 @@ bool APDSHandler::readCh1Light(uint16_t &val)
  ******************************************************************************/
 
 /**
- * @brief Reads the proximity level as an 8-bit value
+ * @brief Reads the 16-bit proximity value
  *
  * @param[out] val value of the proximity sensor.
  * @return True if operation successful. False otherwise.
  */
 bool APDSHandler::readProximity(uint16_t &val)
 {
-    val = 0;
-    uint8_t val_byte;
-
-    /* Read value from proximity data register */
-    if (!wireReadDataByte(APDS9930_PDATAL, val_byte))
-    {
-        return false;
-    }
-    val = val_byte;
-    if (!wireReadDataByte(APDS9930_PDATAH, val_byte))
-    {
-        return false;
-    }
-    val += ((uint16_t)val_byte << 8);
-
-    return true;
+    return readWord(APDS9930_PDATAL, val);
 }
 
 /*******************************************************************************
@@ -637,24 +572,16 @@ bool APDSHandler::readProximity(uint16_t &val)
 /**
  * @brief Returns the lower threshold for proximity detection
  *
- * @return lower threshold
+ * @return lower threshold. 0 on I2C failure.
  */
 uint16_t APDSHandler::getProximityIntLowThreshold()
 {
     uint16_t val;
-    uint8_t val_byte;
 
-    /* Read value from PILT register */
-    if (!wireReadDataByte(APDS9930_PILTL, val_byte))
+    if (!readWord(APDS9930_PILTL, val))
     {
-        val = 0;
+        return 0;
     }
-    val = val_byte;
-    if (!wireReadDataByte(APDS9930_PILTH, val_byte))
-    {
-        val = 0;
-    }
-    val |= ((uint16_t)val_byte << 8);
 
     return val;
 }
@@ -687,24 +614,16 @@ bool APDSHandler::setProximityIntLowThreshold(uint16_t threshold)
 /**
  * @brief Returns the high threshold for proximity detection
  *
- * @return high threshold
+ * @return high threshold. 0 on I2C failure.
  */
 uint16_t APDSHandler::getProximityIntHighThreshold()
 {
     uint16_t val;
-    uint8_t val_byte;
 
-    /* Read value from PILT register */
-    if (!wireReadDataByte(APDS9930_PIHTL, val_byte))
+    if (!readWord(APDS9930_PIHTL, val))
     {
-        val = 0;
+        return 0;
     }
-    val = val_byte;
-    if (!wireReadDataByte(APDS9930_PIHTH, val_byte))
-    {
-        val = 0;
-    }
-    val |= ((uint16_t)val_byte << 8);
 
     return val;
 }
@@ -819,7 +738,7 @@ uint8_t APDSHandler::getProximityGain()
         return ERROR;
     }
 
-    /* Shift and mask out PDRIVE bits */
+    /* Shift and mask out PGAIN bits */
     val = (val >> 2) & 0b00000011;
 
     return val;
@@ -883,7 +802,7 @@ uint8_t APDSHandler::getProximityDiode()
         return ERROR;
     }
 
-    /* Shift and mask out PDRIVE bits */
+    /* Shift and mask out PDIODE bits */
     val = (val >> 4) & 0b00000011;
 
     return val;
@@ -947,7 +866,7 @@ uint8_t APDSHandler::getAmbientLightGain()
         return ERROR;
     }
 
-    /* Shift and mask out ADRIVE bits */
+    /* Mask out AGAIN bits */
     val &= 0b00000011;
 
     return val;
@@ -960,7 +879,7 @@ uint8_t APDSHandler::getAmbientLightGain()
  *   0        1x
  *   1        8x
  *   2       16x
- *   3       64x
+ *   3      120x
  *
  * @param[in] drive the value (0-3) for the gain
  * @return True if operation successful. False otherwise.
@@ -986,6 +905,9 @@ bool APDSHandler::setAmbientLightGain(uint8_t drive)
         return false;
     }
 
+    /* Remember the gain for lux conversion */
+    ambientGain_ = drive;
+
     return true;
 }
 
@@ -1001,24 +923,7 @@ bool APDSHandler::setAmbientLightGain(uint8_t drive)
  */
 bool APDSHandler::getLightIntLowThreshold(uint16_t &threshold)
 {
-    uint8_t val_byte;
-    threshold = 0;
-
-    /* Read value from ambient light low threshold, low byte register */
-    if (!wireReadDataByte(APDS9930_AILTL, val_byte))
-    {
-        return false;
-    }
-    threshold = val_byte;
-
-    /* Read value from ambient light low threshold, high byte register */
-    if (!wireReadDataByte(APDS9930_AILTH, val_byte))
-    {
-        return false;
-    }
-    threshold = threshold + ((uint16_t)val_byte << 8);
-
-    return true;
+    return readWord(APDS9930_AILTL, threshold);
 }
 
 /**
@@ -1054,29 +959,12 @@ bool APDSHandler::setLightIntLowThreshold(uint16_t threshold)
 /**
  * @brief Gets the high threshold for ambient light interrupts
  *
- * @param[out] threshold current low threshold stored on the APDS-9930
+ * @param[out] threshold current high threshold stored on the APDS-9930
  * @return True if operation successful. False otherwise.
  */
 bool APDSHandler::getLightIntHighThreshold(uint16_t &threshold)
 {
-    uint8_t val_byte;
-    threshold = 0;
-
-    /* Read value from ambient light high threshold, low byte register */
-    if (!wireReadDataByte(APDS9930_AIHTL, val_byte))
-    {
-        return false;
-    }
-    threshold = val_byte;
-
-    /* Read value from ambient light high threshold, high byte register */
-    if (!wireReadDataByte(APDS9930_AIHTH, val_byte))
-    {
-        return false;
-    }
-    threshold = threshold + ((uint16_t)val_byte << 8);
-
-    return true;
+    return readWord(APDS9930_AIHTL, threshold);
 }
 
 /**
@@ -1259,6 +1147,51 @@ bool APDSHandler::clearAllInts()
         return false;
     }
 
+    return true;
+}
+
+/*******************************************************************************
+ * Atomic multi-byte reads
+ ******************************************************************************/
+
+/**
+ * @brief Reads a little-endian 16-bit register pair in ONE transaction so the
+ *        chip latches the high byte together with the low byte.
+ *
+ * @param[in] reg address of the low byte
+ * @param[out] val the 16-bit value
+ * @return True if both bytes were read. False otherwise.
+ */
+bool APDSHandler::readWord(uint8_t reg, uint16_t &val)
+{
+    uint8_t buf[2];
+
+    if (wireReadDataBlock(reg, buf, 2) != 2)
+    {
+        return false;
+    }
+
+    val = (uint16_t)buf[0] | ((uint16_t)buf[1] << 8);
+    return true;
+}
+
+/**
+ * @brief Reads Ch0, Ch1 and proximity (0x14..0x19) in a single burst
+ *
+ * @return True if all 6 bytes were read. False otherwise.
+ */
+bool APDSHandler::readSensorData(uint16_t &ch0, uint16_t &ch1, uint16_t &prox)
+{
+    uint8_t buf[6];
+
+    if (wireReadDataBlock(APDS9930_Ch0DATAL, buf, 6) != 6)
+    {
+        return false;
+    }
+
+    ch0 = (uint16_t)buf[0] | ((uint16_t)buf[1] << 8);
+    ch1 = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
+    prox = (uint16_t)buf[4] | ((uint16_t)buf[5] << 8);
     return true;
 }
 

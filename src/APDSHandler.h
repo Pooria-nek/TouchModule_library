@@ -109,18 +109,18 @@
 #define DEFAULT_PDIODE 2
 #define DEFAULT_PGAIN PGAIN_8X
 #define DEFAULT_AGAIN AGAIN_1X
-#define DEFAULT_PILT 0      // Low proximity threshold prox < PILT
+#define DEFAULT_PILT 0      // Low proximity threshold prox < PILT (0 = never fires)
 #define DEFAULT_PIHT 700    // High proximity threshold prox > PIHT
 #define DEFAULT_AILT 0xFFFF // Force interrupt for calibration
 #define DEFAULT_AIHT 0
 #define DEFAULT_PERS 0x01
 
-/* ALS coefficients */
+/* ALS coefficients (float literals: Cortex-M3 has no FPU, avoid double math) */
 #define DF 52
-#define GA 0.49
-#define ALS_B 1.862
-#define ALS_C 0.746
-#define ALS_D 1.291
+#define GA 0.49f
+#define ALS_B 1.862f
+#define ALS_C 0.746f
+#define ALS_D 1.291f
 
 /* State definitions */
 enum
@@ -135,58 +135,117 @@ enum
 class APDSHandler
 {
 public:
-    /* Initialization methods */ APDSHandler(TwoWire &wirePort);
+    /* Initialization methods */
+    APDSHandler(TwoWire &wirePort);
     ~APDSHandler();
-    bool init();
+
+    /*
+     * begin() configures the chip but leaves all functions DISABLED.
+     * Call enableProximitySensor() and/or enableLightSensor() afterwards.
+     */
+    bool begin();
+
+    /*
+     * Polls the sensor: one burst read of ALS + proximity, updates
+     * hysteresis state and services a pending interrupt (see irqHandler()).
+     */
     void update();
-    void irqHandler();
+
+    /* Call from the INT pin ISR. The interrupt is cleared in update(). */
+    void irq() { irqFlag_ = true; } // call from the GPIO ISR
+    bool irqPending() const { return irqFlag_; }
+    bool armProximityInterrupt();
+    bool disarmProximityInterrupt();
+
     uint8_t getMode();
     bool setMode(uint8_t mode, uint8_t enable); /* Turn the APDS-9930 on and off */
     bool enablePower();
-    bool disablePower(); /* Enable or disable specific sensors */
+    bool disablePower();
+
+    /* Enable or disable specific sensors */
+    bool setProximitySensor(bool enable, bool interrupts = false);
+    bool setLightSensor(bool enable, bool interrupts = false);
     bool enableLightSensor(bool interrupts = false);
     bool disableLightSensor();
     bool enableProximitySensor(bool interrupts = false);
-    bool disableProximitySensor(); /* LED drive strength control */
+    bool disableProximitySensor();
+
+    /* LED drive strength control */
     uint8_t getLEDDrive();
-    bool setLEDDrive(uint8_t drive); /* Gain control */
+    bool setLEDDrive(uint8_t drive);
+
+    /* Gain control */
     uint8_t getAmbientLightGain();
     bool setAmbientLightGain(uint8_t gain);
     uint8_t getProximityGain();
     bool setProximityGain(uint8_t gain);
     bool setProximityDiode(uint8_t drive);
-    uint8_t getProximityDiode(); /* Light */
+    uint8_t getProximityDiode();
+
+    /* Light */
     bool readAmbientLightLux(unsigned long &val);
     float floatAmbientToLux(uint16_t Ch0, uint16_t Ch1);
     unsigned long ulongAmbientToLux(uint16_t Ch0, uint16_t Ch1);
     bool readCh0Light(uint16_t &val);
-    bool readCh1Light(uint16_t &val); /* Proximity */
+    bool readCh1Light(uint16_t &val);
+
+    /* Proximity */
     bool readProximity(uint16_t &val);
     uint16_t getProximity();
-    unsigned long getAmbientLightLux(); /* * Proximity detection * * nearThreshold: * Value above which the object is considered NEAR. * * farThreshold: * Value below which the object is considered FAR. * * The difference between them provides hysteresis. */
-    void setProximityThresholds(uint16_t farThreshold, uint16_t nearThreshold);
+    unsigned long getAmbientLightLux();
+
+    /*
+     * Proximity detection
+     *
+     * nearThreshold: value at/above which the object is considered NEAR.
+     * farThreshold:  value at/below which the object is considered FAR.
+     *
+     * The difference between them provides hysteresis.
+     *
+     * The near threshold is also written to the chip's PIHT register so the
+     * hardware interrupt agrees with isNear(). PILT is left alone on purpose:
+     * with hysteresis thresholds it would keep INT asserted while idle.
+     *
+     * Returns false if the pair is invalid (far >= near, nothing changed) or
+     * the I2C write failed (software thresholds are still applied).
+     */
+    bool setProximityThresholds(uint16_t farThreshold, uint16_t nearThreshold);
     bool isNear() const;
     bool isFar() const;
     uint16_t getProximityNearThreshold() const;
-    uint16_t getProximityFarThreshold() const; /* Ambient light state */
+    uint16_t getProximityFarThreshold() const;
+
+    /* Ambient light state */
     void setLightThresholds(unsigned long darkThreshold, unsigned long brightThreshold);
     bool isDark() const;
     bool isBright() const;
     unsigned long getDarkThreshold() const;
-    unsigned long getBrightThreshold() const;                              /* * Automatic display brightness * * Returns 0-100%. */
-    uint8_t getAutoBrightness() const;                                     /* * Configure the brightness range returned by * getAutoBrightness(). */
-    void setBrightnessRange(uint8_t minBrightness, uint8_t maxBrightness); /* Get and set light interrupt thresholds */
+    unsigned long getBrightThreshold() const;
+
+    /* Automatic display brightness, returns 0-100%. */
+    uint8_t getAutoBrightness() const;
+
+    /* Configure the brightness range returned by getAutoBrightness(). */
+    void setBrightnessRange(uint8_t minBrightness, uint8_t maxBrightness);
+
+    /* Get and set light interrupt thresholds */
     bool getLightIntLowThreshold(uint16_t &threshold);
     bool setLightIntLowThreshold(uint16_t threshold);
     bool getLightIntHighThreshold(uint16_t &threshold);
-    bool setLightIntHighThreshold(uint16_t threshold); /* Get and set interrupt enables */
+    bool setLightIntHighThreshold(uint16_t threshold);
+
+    /* Get and set interrupt enables */
     uint8_t getAmbientLightIntEnable();
     bool setAmbientLightIntEnable(uint8_t enable);
     uint8_t getProximityIntEnable();
-    bool setProximityIntEnable(uint8_t enable); /* Clear interrupts */
+    bool setProximityIntEnable(uint8_t enable);
+
+    /* Clear interrupts */
     bool clearAmbientLightInt();
     bool clearProximityInt();
     bool clearAllInts();
+
+    /* Return 0 on I2C failure */
     uint16_t getProximityIntLowThreshold();
     bool setProximityIntLowThreshold(uint16_t threshold);
     uint16_t getProximityIntHighThreshold();
@@ -197,18 +256,34 @@ private:
     volatile bool irqFlag_;
     uint16_t lastProximity_;
     unsigned long lastLux_;
+    uint8_t ambientGain_; /* Cached AGAIN field of CONTROL (0-3) */
     uint16_t proximity_data = 0;
     unsigned long ambient_light_lux_int = 0;
     float ambient_light_lux_float = 0;
     uint16_t ch0_light = 0;
-    uint16_t ch1_light = 0; /* Proximity hysteresis */
+    uint16_t ch1_light = 0;
+
+    /* Proximity hysteresis */
     uint16_t proximityFarThreshold_;
     uint16_t proximityNearThreshold_;
-    bool proximityNear_; /* Ambient light thresholds */
+    bool proximityNear_;
+
+    /* Ambient light thresholds */
     unsigned long darkThreshold_;
-    unsigned long brightThreshold_; /* Automatic display brightness */
+    unsigned long brightThreshold_;
+
+    /* Automatic display brightness */
     uint8_t minBrightness_;
-    uint8_t maxBrightness_; /* Raw I2C Commands */
+    uint8_t maxBrightness_;
+
+    /* Single read-modify-write of ENABLE for a sensor + its interrupt bit */
+    bool setSensor(uint8_t enBit, uint8_t intBit, bool enable, bool interrupts);
+
+    /* Atomic multi-byte reads (single auto-increment transaction) */
+    bool readWord(uint8_t reg, uint16_t &val);
+    bool readSensorData(uint16_t &ch0, uint16_t &ch1, uint16_t &prox);
+
+    /* Raw I2C Commands */
     bool wireWriteByte(uint8_t val);
     bool wireWriteDataByte(uint8_t reg, uint8_t val);
     bool wireWriteDataBlock(uint8_t reg, uint8_t *val, unsigned int len);

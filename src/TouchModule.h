@@ -20,6 +20,8 @@
 #include "NTC.h"
 #include "BS8112.h"
 
+#include "KeyFunctionStorage.h"
+
 #define TOUCH_HOLD_TIME 1000     // ms hold time
 #define TOUCH_HOLD_REPEAT 600    // ms between repeats after hold
 #define TOUCH_DOUBLE_TAP_GAP 250 // max gap between taps
@@ -230,7 +232,8 @@ public:
     void process(const BusproFrame &frame);
 
     void sendResponse(uint16_t opcode, uint16_t dst, const uint8_t *payload, uint8_t payloadLen);
-    bool sendConfirm(uint16_t opcode, uint16_t dst, const uint8_t *payload, uint8_t payloadLen);
+    // bool sendConfirm(uint16_t opcode, uint16_t dst, const uint8_t *payload, uint8_t payloadLen);
+    void sendConfirm(SwitchPanel::FunctionPacket packet);
 
     MemoryCore &flash() { return flash_; }
 
@@ -238,12 +241,14 @@ public:
 
     void updateAPDS();
 
-    uint8_t getPhysicalButton(uint8_t key);
-    uint8_t getLogicalButton(uint8_t key);
+    uint8_t getSplitButton(uint8_t key);
+    uint8_t getMergedButton(uint8_t key);
+
+    void irqProxHandler();
+    bool getProxIrq();
 
     void irqTouchHandler(); // Should be called by external GPIO interrupt service routine
-
-    bool getIrq();
+    bool getTouchIrq();
 
     // void setKeyType(uint8_t key, ButtonType type);
     // ButtonType getKeyType(uint8_t key);
@@ -286,7 +291,11 @@ public:
     const HVACPanel &hvac() const { return hvac_; }
 #endif
 private:
-    static constexpr const char *SOFTWARE_VERSION = "v0.30.0-beta";
+    static constexpr const char *FACTORY_NAME = "Zeller Z27";
+    static constexpr const char *HARDWARE_VERSION = "STM3F103RB";
+    static constexpr const char *SOFTWARE_VERSION = "v1.5.0-beta";
+
+    using KeyStorageLayout = KeyFunctionStorage<130>;
 
     // void applyTouchHardware(uint8_t channel);
     // void readMcuUID();
@@ -338,8 +347,6 @@ private:
 
 #ifdef HAS_APDS
     APDSHandler apds_;
-
-    // volatile bool irqProxFlag_;
 #endif
 
 #ifdef DLP_PANEL
@@ -369,29 +376,55 @@ private:
     SwitchPanel switchPanel_;
 
     void updatePageLeds(uint8_t page);
-    void ledRunner(uint8_t page, uint16_t key);
+    void setMergedLedState(uint16_t key, bool state);
+    void setSeparateLedState(uint16_t key, bool state);
 
     struct FunctionRunnerState
     {
         bool active = false;
         bool functionExecuting = false;
 
-        uint8_t page = 0;
-        uint16_t key = 0;
-
-        uint16_t logicalButton = 0;
-        uint16_t physicalButton = 0;
-
-        uint8_t ledChannel = 0;
+        uint8_t keyNumber = 0; // 0 invalid
+        uint8_t keyType = 0;
+        bool isMerge; // true = merge - false = seprate
+        bool state;
 
         uint8_t functionIndex = 0;
         uint8_t functionEnd = 0;
 
-        uint8_t functionsPerUpdate = 3;
+        uint8_t functionsPerUpdate = 3; // max flash slots examined per call (skips invalid ones)
+
+        // confirm tracking
+        bool waitingConfirm = false;
+        uint16_t expSrc = 0;
+        uint16_t expOp = 0;
+        uint32_t confirmStart = 0;
+
+        // retry
+        static constexpr uint8_t MAX_TRIES = 3;
+        static constexpr uint32_t TRY_WINDOW_MS = 500;
+        uint8_t tries = 0;
+        uint16_t pendingOp = 0;
+        uint16_t pendingDst = 0;
+        SwitchPanel::FunctionPacket pendingPacket{};
     };
     FunctionRunnerState functionRunnerState_;
 
-    void functionRunner(uint8_t page, uint16_t key);
+    // confirm tracking
+    bool waitingConfirm = false;
+    uint16_t expSrc = 0;
+    uint16_t expOp = 0;
+    uint32_t confirmStart = 0;
+
+    // retry
+    static constexpr uint8_t MAX_TRIES = 3;
+    static constexpr uint32_t TRY_WINDOW_MS = 500;
+    uint8_t tries = 0;
+    uint16_t pendingOp = 0;
+    uint16_t pendingDst = 0;
+    SwitchPanel::FunctionPacket pendingPacket{};
+
+    void functionRunner(uint16_t key);
     void updateFunctionRunner();
 
     // --- Device mode (Sleep/Wake) ---

@@ -46,7 +46,7 @@ uint8_t SwitchPanel::getKeyType(uint8_t key)
     if (key > 16)
         return static_cast<uint8_t>(SwitchType::Invalid);
 
-    return static_cast<uint8_t>(keytype_[key - 1]);
+    return static_cast<uint8_t>(keytype_[key]);
 }
 
 // 9 byte return
@@ -165,402 +165,97 @@ uint16_t SwitchPanel::getOperationCode(uint8_t type)
         return BusproOp::SCENE_CONTROL.req();
 
     case OperationType::Sequence:
-        return 0x0000;
+        return UINT16_MAX;
 
     case OperationType::TimerSwitch:
-        return 0x0000;
+        return UINT16_MAX;
 
     case OperationType::UniversalSwitch:
-        return 0x0000;
+        return UINT16_MAX;
 
     case OperationType::SingleChannelControl:
         return BusproOp::CONTROL_SINGLE.req();
 
     case OperationType::CurtainSwitch:
-        return 0x0000;
+        return UINT16_MAX;
 
     case OperationType::GPRSControl:
-        return 0x0000;
+        return UINT16_MAX;
 
     case OperationType::PanelControl:
         return BusproOp::Touch::PANEL_CONTROL.req();
 
     case OperationType::BroadcastScene:
-        return 0x0000;
+        return UINT16_MAX;
 
     case OperationType::BroadcastChannel:
-        return 0x0000;
+        return UINT16_MAX;
 
     case OperationType::SecurityModule:
-        return 0x0000;
+        return UINT16_MAX;
 
     case OperationType::MusicControl:
-        return 0x0000;
+        return UINT16_MAX;
 
     case OperationType::UniversalControl:
-        return 0x0000;
+        return UINT16_MAX;
 
     case OperationType::InfraredControl:
-        return 0x0000;
+        return UINT16_MAX;
 
     case OperationType::LogicLightAdjust:
-        return 0x0000;
+        return UINT16_MAX;
 
     default:
-        return 0xABCD;
+        return UINT16_MAX;
     }
 }
 
 uint8_t SwitchPanel::makeFunction(FunctionPacket &packet, uint8_t type, uint8_t state, const uint8_t *function)
 {
 
-    uint8_t len = getOperationLen(function[0]);
+    uint8_t len = getOperationLen(function[0]) + 4;
     uint8_t keytype = getKeyType(type);
 
-    // getKeyType()
+    packet.dstAddress = (static_cast<uint16_t>(function[1]) << 8) | function[2];
+    packet.oprCode = getOperationCode(function[0]);
 
-    // if (condition)
-    // {
-    //     /* code */
-    // }
+    switch (static_cast<OperationType>(function[0]))
+    {
+    case OperationType::Scene:
+        packet.data[0] = function[3];
+        packet.data[1] = function[4];
+        break;
 
-    packet.data[0] = function[3];
-    packet.data[1] = state ? 0x64 : 0x00;
-    packet.data[2] = type;
-    packet.data[3] = 0;
+    case OperationType::Sequence:
+    case OperationType::TimerSwitch:
+    case OperationType::UniversalSwitch:
+        len = UINT8_MAX;
+        break;
+
+    case OperationType::SingleChannelControl:
+        packet.data[0] = function[3];
+        packet.data[1] = state ? 0x64 : 0x00;
+        packet.data[2] = function[5];
+        packet.data[3] = function[6];
+        break;
+
+    case OperationType::CurtainSwitch:
+    case OperationType::GPRSControl:
+    case OperationType::PanelControl:
+    case OperationType::BroadcastScene:
+    case OperationType::BroadcastChannel:
+    case OperationType::SecurityModule:
+    case OperationType::MusicControl:
+    case OperationType::UniversalControl:
+    case OperationType::InfraredControl:
+    case OperationType::LogicLightAdjust:
+        len = UINT8_MAX;
+        break;
+
+    default:
+        break;
+    }
 
     return len;
 }
-
-// bool SwitchPanel::runSingle(uint8_t state, uint8_t button)
-// {
-//     uint8_t payload[7];
-
-//     flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_FUNCTIONS, MemoryAdress::Touch::channelFunction(button, 1)), payload, sizeof(payload));
-
-//     auto operation = static_cast<OperationType>(payload[0]);
-//     uint16_t destination = (static_cast<uint16_t>(payload[1]) << 8) | payload[2];
-//     uint16_t oprationCode;
-
-//     switch (operation)
-//     {
-//     case OperationType::Scene:
-//     {
-//         oprationCode = BusproOp::SCENE_CONTROL.req();
-//         uint8_t respond[2] = {payload[3], payload[4]};
-//         // sendConfirm(oprationCode, destination, respond, sizeof(respond));
-//         return true;
-//     }
-
-//         // case OperationType::Sequence:
-//         // {
-//         //     oprationCode = BusproOp::SEQUENCE_CONTROL.req();
-//         //     return true;
-//         // }
-
-//         // case OperationType::TimerSwitch:
-//         // {
-//         //     return true;
-//         // }
-
-//         // case OperationType::UniversalSwitch:
-//         // {
-//         //     return true;
-//         // }
-
-//     case OperationType::SingleChannelControl:
-//     {
-//         oprationCode = BusproOp::CONTROL_SINGLE.req();
-//         uint8_t value;
-
-//         if (state == 0)
-//         {
-//             value = 0x00;
-//         }
-//         else if (state == 1)
-//         {
-//             value = 0x64;
-//         }
-//         // else if (state == 2)
-//         // {
-//         //     value = (payload[4] == 0x64) ? 0x00 : 0x64;
-
-//         //     payload[4] = value;
-//         //     flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_FUNCTIONS, MemoryAdress::Touch::channelFunction(button, 1)), payload, sizeof(payload));
-//         // }
-
-//         uint8_t respond[4] = {payload[3], value, payload[5], payload[6]};
-
-//         // sendConfirm(oprationCode, destination, respond, sizeof(respond));
-//         return true;
-//     }
-
-//         // case OperationType::CurtainSwitch:
-//         // {
-//         //     return true;
-//         // }
-
-//         // case OperationType::GPRSControl:
-//         // {
-//         //     return true;
-//         // }
-
-//     case OperationType::PanelControl:
-//     {
-//         oprationCode = BusproOp::Touch::PANEL_CONTROL.req();
-//         return true;
-//     }
-
-//         // case OperationType::BroadcastScene:
-//         // {
-//         //     oprationCode = BusproOp::SCENE_CONTROL.req();
-//         //     const uint8_t respond[4] = {};
-
-//         //     // sendConfirm(oprationCode, 0xFFFF, respond, sizeof(respond));
-//         //     return true;
-//         // }
-
-//         // case OperationType::BroadcastChannel:
-//         // {
-//         //     oprationCode = BusproOp::CONTROL_SINGLE.req();
-//         //     const uint8_t respond[4] = {};
-
-//         //     // sendConfirm(oprationCode, 0xFFFF, respond, sizeof(respond));
-//         //     return true;
-//         // }
-
-//         // case OperationType::SecurityModule:
-//         // {
-//         //     return true;
-//         // }
-
-//         // case OperationType::MusicControl:
-//         // {
-//         //     return true;
-//         // }
-
-//         // case OperationType::UniversalControl:
-//         // {
-//         //     return true;
-//         // }
-
-//         // case OperationType::InfraredControl:
-//         // {
-//         //     return true;
-//         // }
-
-//         // case OperationType::LogicLightAdjust:
-//         // {
-//         //     return true;
-//         // }
-
-//     default:
-//         return false;
-//     }
-// }
-
-// bool SwitchPanel::runCombination(uint8_t state, uint8_t button)
-// {
-//     bool sent = false;
-
-//     for (uint8_t function = 1; function <= 50; function++)
-//     {
-//         uint8_t payload[7];
-
-//         const uint32_t address = flash_.findAdrress(
-//             MemoryAdress::Touch::SECTOR_FUNCTIONS,
-//             MemoryAdress::Touch::channelFunction(button, function));
-
-//         flash_.read(address, payload, sizeof(payload));
-
-//         // End of combination
-//         if (payload[0] == 0x00 || payload[0] == 0xFF)
-//             break;
-
-//         const auto operation =
-//             static_cast<OperationType>(payload[0]);
-
-//         const uint16_t destination =
-//             (static_cast<uint16_t>(payload[1]) << 8) | payload[2];
-
-//         switch (operation)
-//         {
-//         case OperationType::Scene:
-//         {
-//             const uint8_t respond[2] = {
-//                 payload[3],
-//                 payload[4]};
-
-//             // sendConfirm(
-//             //     BusproOp::SCENE_CONTROL.req(),
-//             //     destination,
-//             //     respond,
-//             //     sizeof(respond));
-
-//             sent = true;
-//             break;
-//         }
-
-//         case OperationType::SingleChannelControl:
-//         {
-//             uint8_t value;
-
-//             if (state == 0)
-//             {
-//                 value = 0x00;
-//             }
-//             else if (state == 1)
-//             {
-//                 value = 0x64;
-//             }
-//             else if (state == 2)
-//             {
-//                 // Toggle will be implemented later
-//                 continue;
-//             }
-//             else
-//             {
-//                 continue;
-//             }
-
-//             const uint8_t respond[4] = {payload[3], value, payload[5], payload[6]};
-
-//             // sendConfirm(BusproOp::CONTROL_SINGLE.req(), destination, respond, sizeof(respond));
-
-//             sent = true;
-//             break;
-//         }
-
-//         default:
-//             break;
-//         }
-
-//         // delay(100);
-//     }
-
-//     return sent;
-// }
-
-// bool SwitchPanel::runMomentary(bool press, uint8_t button)
-// {
-//     uint8_t payload[7];
-
-//     // Pressed -> function 1
-//     // Released -> function 50
-//     // const uint8_t function = press ? 1 : 50;
-
-//     flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_FUNCTIONS, MemoryAdress::Touch::channelFunction(button, 1)), payload, sizeof(payload));
-
-//     auto operation = static_cast<OperationType>(payload[0]);
-//     uint16_t destination = (static_cast<uint16_t>(payload[1]) << 8) | payload[2];
-//     uint16_t oprationCode;
-
-//     switch (operation)
-//     {
-//     case OperationType::Scene:
-//     {
-//         oprationCode = BusproOp::SCENE_CONTROL.req();
-//         uint8_t respond[2] = {payload[3], payload[4]};
-//         // sendConfirm(oprationCode, destination, respond, sizeof(respond));
-//         return true;
-//     }
-
-//     case OperationType::SingleChannelControl:
-//     {
-//         uint8_t value;
-
-//         if (press)
-//         {
-//             value = 0x64;
-//         }
-//         else
-//         {
-//             value = 0x00;
-//         }
-
-//         oprationCode = BusproOp::CONTROL_SINGLE.req();
-//         uint8_t respond[4] = {payload[3], value, payload[5], payload[6]};
-//         // sendConfirm(oprationCode, destination, respond, sizeof(respond));
-//         return true;
-//     }
-
-//     default:
-//         return false;
-//     }
-
-//     return true;
-// }
-
-// bool SwitchPanel::runDblclick(bool lefty, bool combination, uint8_t button)
-// {
-//     if (lefty)
-//     {
-//     }
-//     else
-//     {
-//     }
-//     return true;
-// }
-
-// /*
-//  *
-//  */
-// bool SwitchPanel::runSeprateHold(bool lefty, bool combination, uint8_t button)
-// {
-//     if (lefty)
-//     {
-//     }
-//     else
-//     {
-//     }
-//     return true;
-// }
-
-// //////////////////////////////////////////////////////////////////////////////////////////
-
-// uint16_t SwitchPanel::runOperationSingleChannel(uint8_t *response, uint8_t function, uint8_t type)
-// {
-//     uint8_t value;
-
-//     switch (type)
-//     {
-//     case 0:
-//         value = 0x00;
-//         break;
-
-//     case 1:
-//         value = 0x64;
-//         break;
-
-//     case 2:
-//         value = (response[4] == 0x64) ? 0x00 : 0x64;
-
-//         response[4] = value;
-
-//         flash_.update(
-//             flash_.findAdrress(
-//                 MemoryAdress::Touch::SECTOR_FUNCTIONS,
-//                 function),
-//             response,
-//             7);
-//         break;
-
-//     default:
-//         return 0;
-//     }
-
-//     const uint8_t output[4] = {response[3], value, response[5], response[6]};
-
-//     memcpy(response, output, 4);
-
-//     return BusproOp::CONTROL_SINGLE.req();
-// }
-
-// uint16_t runOperationScene(uint8_t *response)
-// {
-//     const uint8_t output[4] = {response[3], response[4]};
-
-//     memcpy(response, output, 4);
-
-//     return BusproOp::SCENE_CONTROL.req();
-// }

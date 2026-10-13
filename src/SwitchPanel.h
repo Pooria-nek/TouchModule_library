@@ -25,8 +25,8 @@ public:
         // Momentary = 0x06, // 1 opration turn on for tap | 1 opration turn off for release
 
         // seprate | tap
-        DblclickSingle = 0x0A,   // 1 opration on tap  | 49 opration double on tap
-        DblclickCombined = 0x0B, // 49 opration on tap | 49 opration double on tap
+        DblclickSingle = 0x0A,   // 1 opration on tap left | 49 opration on tap right
+        DblclickCombined = 0x0B, // 49 opration on tap left | 49 opration on tap right
 
         // seprate | hold
         ShortLongPress = 0x11, // 49 opration on press | 49 opration on hold trig (seprate left/right)
@@ -57,7 +57,9 @@ public:
 
     struct FunctionPacket
     {
-        uint8_t data[6];
+        uint16_t oprCode;
+        uint16_t dstAddress;
+        uint8_t data[7];
         uint8_t size;
     };
 
