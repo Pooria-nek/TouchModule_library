@@ -37,7 +37,7 @@ class BS8112
 public:
     static constexpr uint8_t DEFAULT_ADDRESS = 0x50;
     static constexpr uint8_t MAX_KEYS = 12;
-    static constexpr uint8_t DEFAULT_THRESHOLD = 7; // valid range 1..32
+    static constexpr uint8_t DEFAULT_THRESHOLD = 5; // valid range 1..32
     static constexpr uint32_t DEFAULT_HOLD_MS = 1000;
     static constexpr uint16_t NO_KEY = UINT16_MAX;
 

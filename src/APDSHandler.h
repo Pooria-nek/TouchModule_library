@@ -149,7 +149,7 @@ public:
      * Polls the sensor: one burst read of ALS + proximity, updates
      * hysteresis state and services a pending interrupt (see irqHandler()).
      */
-    void update();
+    bool update();
 
     /* Call from the INT pin ISR. The interrupt is cleared in update(). */
     void irq() { irqFlag_ = true; } // call from the GPIO ISR

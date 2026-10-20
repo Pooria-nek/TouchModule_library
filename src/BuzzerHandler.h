@@ -12,7 +12,18 @@ struct BuzzerNote
 
 // Tiny UI click — single crisp tick
 static const BuzzerNote clickSeq[] = {
-    {5000, 8, 0},
+    {4500, 7, 0},
+};
+
+// Device finder — clean, rising, and easy to recognize
+static const BuzzerNote findSeq[] = {
+    {2800, 70, 20},
+    {3600, 90, 20},
+    {4400, 120, 180},
+
+    {3600, 70, 20},
+    {4400, 90, 20},
+    {5200, 140, 0},
 };
 
 // Soft confirm — two quick ascending taps
@@ -147,8 +158,7 @@ public:
 
     void startup()
     {
-        playSequence(clickSeq, sizeof(clickSeq) / sizeof(clickSeq[0]));
-        // playSequence(startupSeq, sizeof(startupSeq) / sizeof(startupSeq[0]));
+        playSequence(startupSeq, sizeof(startupSeq) / sizeof(startupSeq[0]));
     }
 
     void alarm()
@@ -179,6 +189,11 @@ public:
     void heartbeat()
     {
         playSequence(heartbeatSeq, sizeof(heartbeatSeq) / sizeof(heartbeatSeq[0]));
+    }
+
+    void findIt()
+    {
+        playSequence(findSeq, sizeof(findSeq) / sizeof(findSeq[0]));
     }
 
     // count identical beeps, built on the fly into a small internal buffer

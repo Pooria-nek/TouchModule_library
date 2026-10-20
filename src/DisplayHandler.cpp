@@ -449,24 +449,24 @@ void DisplayHandler::drawHvacTemp(uint8_t y, float_t current, float_t sensor)
     const uint8_t x = 8;
     const uint8_t icon = 13;
 
-    const bool currentValid = current >= 16.0f && current <= 40.0f;
-    const bool sensorValid = sensor >= 16.0f && sensor <= 40.0f;
+    const bool currentValid = current >= 0.0f && current <= 30.0f;
+    const bool sensorValid = sensor >= 0.0f && sensor <= 30.0f;
 
     u8g2.drawXBMP(x, y + 2, icon, icon, temp_icon);
 
     u8g2.setCursor(30, y + 4);
-    if (currentValid)
+    // if (currentValid)
         u8g2.print(current, 1);
-    else
-        u8g2.print("--.-");
+    // else
+    //     u8g2.print("--.-");
 
     u8g2.drawXBMP(x, y + 16, icon, icon, internal_icon);
 
     u8g2.setCursor(30, y + 18);
-    if (sensorValid)
+    // if (sensorValid)
         u8g2.print(sensor, 1);
-    else
-        u8g2.print("--.-");
+    // else
+    //     u8g2.print("--.-");
 
     drawChangePointer(y + 11);
 
@@ -512,8 +512,8 @@ void DisplayHandler::drawHvacSpeed(uint8_t y, uint8_t speed, bool autos)
 #ifdef OLDIE
 void DisplayHandler::drawHvacPage(const HVACPanel &hvac)
 {
-    if (!hvacPanel_)
-        return; // update(hvac) hasn't been called yet — nothing to draw
+    // if (!hvacPanel_)
+    //     return; // update(hvac) hasn't been called yet — nothing to draw
 
     const HVACPanel::State &state = hvac.currentState();
 
@@ -534,10 +534,10 @@ void DisplayHandler::drawHvacPage(const HVACPanel &hvac)
     // Current HVAC image
     u8g2.drawXBMP(0, 90, 64, 30, hvac.currentImage());
 
-    u8g2.drawVLine(33, 0, 30);
-    u8g2.drawHLine(0, 30, 64);
-    u8g2.drawHLine(0, 60, 64);
-    u8g2.drawHLine(0, 90, 64);
+    // u8g2.drawVLine(33, 0, 30);
+    // u8g2.drawHLine(0, 30, 64);
+    // u8g2.drawHLine(0, 60, 64);
+    // u8g2.drawHLine(0, 90, 64);
 }
 #endif
 
@@ -1074,10 +1074,10 @@ void DisplayHandler::send()
     u8g2.sendBuffer();
 }
 
-// void DisplayHandler::drawText(int8_t x, int8_t y, const char *text)
-// {
-//     u8g2.drawStr(x, y, text);
-// }
+void DisplayHandler::drawStr(int8_t x, int8_t y, const char *text)
+{
+    u8g2.drawStr(x, y, text);
+}
 
 void DisplayHandler::drawCenteredText(const char *text)
 {

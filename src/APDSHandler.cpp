@@ -39,67 +39,81 @@ bool APDSHandler::begin()
     uint8_t id;
 
     /* Initialize I2C */
-    // wire_.begin();
+    wire_.begin();
 
-    // Read and verify APDS-9930 ID
+    /* Read ID register and check against known values for APDS-9930 */
     if (!wireReadDataByte(APDS9930_ID, id))
+    {
         return false;
-
-    if (id != APDS9930_ID_1 && id != APDS9930_ID_2)
+    }
+    if (!(id == APDS9930_ID_1 || id == APDS9930_ID_2))
+    {
         return false;
+    }
 
-    // Disable all sensor functions before configuration
+    /* Set ENABLE register to 0 (disable all features) */
     if (!setMode(ALL, OFF))
+    {
         return false;
+    }
 
-    if (!wireWriteDataByte(APDS9930_PTIME, DEFAULT_PTIME))
-        return false;
-
+    /* Set default values for ambient light and proximity registers */
     if (!wireWriteDataByte(APDS9930_ATIME, DEFAULT_ATIME))
+    {
         return false;
-
+    }
     if (!wireWriteDataByte(APDS9930_WTIME, DEFAULT_WTIME))
+    {
         return false;
-
+    }
     if (!wireWriteDataByte(APDS9930_PPULSE, DEFAULT_PPULSE))
+    {
         return false;
-
+    }
     if (!wireWriteDataByte(APDS9930_POFFSET, DEFAULT_POFFSET))
+    {
         return false;
-
+    }
     if (!wireWriteDataByte(APDS9930_CONFIG, DEFAULT_CONFIG))
+    {
         return false;
-
+    }
     if (!setLEDDrive(DEFAULT_PDRIVE))
+    {
         return false;
-
+    }
     if (!setProximityGain(DEFAULT_PGAIN))
+    {
         return false;
-
+    }
     if (!setAmbientLightGain(DEFAULT_AGAIN))
+    {
         return false;
-
+    }
     if (!setProximityDiode(DEFAULT_PDIODE))
+    {
         return false;
-
-    // Configure proximity interrupt thresholds
+    }
     if (!setProximityIntLowThreshold(DEFAULT_PILT))
+    {
         return false;
-
-    if (!setProximityIntHighThreshold(proximityNearThreshold_))
+    }
+    if (!setProximityIntHighThreshold(DEFAULT_PIHT))
+    {
         return false;
-
-    // Configure interrupt persistence
+    }
+    if (!setLightIntLowThreshold(DEFAULT_AILT))
+    {
+        return false;
+    }
+    if (!setLightIntHighThreshold(DEFAULT_AIHT))
+    {
+        return false;
+    }
     if (!wireWriteDataByte(APDS9930_PERS, DEFAULT_PERS))
+    {
         return false;
-
-    // Enable proximity only:
-    // PON  = bit 0 (power on)
-    // PEN  = bit 2 (proximity engine)
-    // PIEN = bit 5 (proximity interrupt)
-    // AIEN remains disabled.
-    if (!wireWriteDataByte(APDS9930_ENABLE, 0x25))
-        return false;
+    }
 
     return true;
 }
@@ -120,68 +134,54 @@ bool APDSHandler::disarmProximityInterrupt()
     return ok;
 }
 
-void APDSHandler::update()
+bool APDSHandler::update()
 {
+    // if (!irqFlag_)
+    //     return false;
+
     uint16_t ch0;
     uint16_t ch1;
     uint16_t prox;
 
-    /*
-     * One atomic burst read of Ch0, Ch1 and proximity.
-     * On failure keep the previous state (and keep the IRQ flag pending).
-     */
     if (!readSensorData(ch0, ch1, prox))
-    {
-        return;
-    }
+        return false;
 
     lastProximity_ = prox;
 
-    /*
-     * Hysteresis:
-     *
-     * FAR -> NEAR only above near threshold
-     * NEAR -> FAR only below far threshold
-     */
-    if (!proximityNear_ &&
-        lastProximity_ >= proximityNearThreshold_)
+    proximityNear_ = false;
+
+    if (lastProximity_ >= proximityNearThreshold_)
     {
         proximityNear_ = true;
     }
-    else if (proximityNear_ &&
-             lastProximity_ <= proximityFarThreshold_)
-    {
-        proximityNear_ = false;
-    }
 
-    lastLux_ = ulongAmbientToLux(ch0, ch1);
+    // lastLux_ = ulongAmbientToLux(ch0, ch1);
 
-    /*
-     * Service a pending interrupt: the chip keeps INT asserted until
-     * a special-function clear command is written.
-     */
-    if (irqFlag_)
-    {
-        irqFlag_ = false;
-        if (!clearAllInts())
-        {
-            irqFlag_ = true; /* retry on next update() */
-        }
-    }
-}
-
-bool APDSHandler::setProximityThresholds(uint16_t farThreshold,
-                                         uint16_t nearThreshold)
-{
-    if (farThreshold >= nearThreshold)
+    if (!clearAllInts())
         return false;
 
+    irqFlag_ = false;
+    return true;
+}
+
+bool APDSHandler::setProximityThresholds(uint16_t farThreshold, uint16_t nearThreshold)
+{
+    if (farThreshold >= nearThreshold || nearThreshold > UINT16_MAX)
+    {
+        return false;
+    }
+
+    // Configure the hardware first.
+    if (!setProximityIntHighThreshold(nearThreshold))
+    {
+        return false;
+    }
+
+    // Commit the software thresholds only after success.
     proximityFarThreshold_ = farThreshold;
     proximityNearThreshold_ = nearThreshold;
 
-    /*
-     * Re-evaluate current state immediately.
-     */
+    // Re-evaluate the current proximity state.
     if (lastProximity_ >= proximityNearThreshold_)
     {
         proximityNear_ = true;
@@ -191,10 +191,7 @@ bool APDSHandler::setProximityThresholds(uint16_t farThreshold,
         proximityNear_ = false;
     }
 
-    /*
-     * Keep the hardware interrupt threshold in sync with the NEAR threshold.
-     */
-    return setProximityIntHighThreshold(proximityNearThreshold_);
+    return true;
 }
 
 bool APDSHandler::isNear() const

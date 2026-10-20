@@ -231,6 +231,19 @@ public:
 
     void process(const BusproFrame &frame);
 
+    static constexpr uint8_t MAX_PENDING_PAYLOAD = 255;
+
+    bool randomSendPending_ = false;
+    uint32_t randomSendTime_ = 0;
+
+    uint16_t pendingOpcode_ = 0;
+    uint16_t pendingDst_ = 0;
+    uint8_t pendingPayload_[MAX_PENDING_PAYLOAD]{};
+    uint8_t pendingPayloadLen_ = 0;
+
+    void processCooldownSend();
+    void sendWithCooldown(uint16_t opcode, uint16_t dst, const uint8_t *payload, uint8_t payloadLen);
+
     void sendResponse(uint16_t opcode, uint16_t dst, const uint8_t *payload, uint8_t payloadLen);
     // bool sendConfirm(uint16_t opcode, uint16_t dst, const uint8_t *payload, uint8_t payloadLen);
     void sendConfirm(SwitchPanel::FunctionPacket packet);
@@ -292,8 +305,11 @@ public:
 #endif
 private:
     static constexpr const char *FACTORY_NAME = "Zeller Z27";
-    static constexpr const char *HARDWARE_VERSION = "STM3F103RB";
-    static constexpr const char *SOFTWARE_VERSION = "v1.5.0-beta";
+    static constexpr const char *HARDWARE_VERSION = "Z27-v5.0";
+    static constexpr const char *SOFTWARE_VERSION = "v1.5.0b"
+                                                    " "__DATE__
+                                                    " ";
+    // static constexpr const char *SOFTWARE_VERSION = __DATE__ " " __TIME__;
 
     using KeyStorageLayout = KeyFunctionStorage<130>;
 
@@ -378,6 +394,7 @@ private:
     void updatePageLeds(uint8_t page);
     void setMergedLedState(uint16_t key, bool state);
     void setSeparateLedState(uint16_t key, bool state);
+    void setLedState(uint16_t key, bool state);
 
     struct FunctionRunnerState
     {
@@ -505,6 +522,8 @@ private:
 
     ////////////////////////////////////// AC ///////////////////////////////////////
 
+    uint8_t selectedHvacIndex() const;
+
     void handleReadAcInfo(const BusproFrame &frame);
     void handleModifyAcInfo(const BusproFrame &frame);
 
@@ -517,6 +536,9 @@ private:
     void handleReadHvacTempSensor(const BusproFrame &frame);
     void handleModifyHvacTempSensor(const BusproFrame &frame);
 
+    void handleReadHvacSynchronous(const BusproFrame &frame);
+    void handleModifyHvacSynchronous(const BusproFrame &frame);
+
     void handleReadHvacEcomode(const BusproFrame &frame);
     void handleModifyHvacEcomode(const BusproFrame &frame);
 
@@ -528,6 +550,9 @@ private:
 
     void handleReadHvacTest(const BusproFrame &frame);
     void handleModifyHvacTest(const BusproFrame &frame);
+
+    void handleReadHvacMember(const BusproFrame &frame);
+    void handleModifyHvacMember(const BusproFrame &frame);
 
     ///////////////////////////////// FLOOR HEATING /////////////////////////////////
 
@@ -604,4 +629,7 @@ private:
 
     void handleReadDeviceRemark(const BusproFrame &frame);
     void handleModifyDeviceRemark(const BusproFrame &frame);
+
+    void handleSingleChannel(const BusproFrame &frame);
+    void handleSceneControl(const BusproFrame &frame);
 };

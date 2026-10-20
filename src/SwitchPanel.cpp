@@ -52,17 +52,24 @@ uint8_t SwitchPanel::getKeyType(uint8_t key)
 // 9 byte return
 void SwitchPanel::getKeyFunction(uint8_t *payload, uint8_t button, uint8_t function)
 {
-    payload[0] = button;
-    payload[1] = function;
+    const uint32_t address = KeyStorageLayout::functionAddress( button, function);
 
-    flash_.read(flash_.findAdrress(MemoryAdress::Touch::SECTOR_FUNCTIONS, MemoryAdress::Touch::channelFunction(button, function)), payload + 2, 7);
+    if (address == UINT32_MAX)
+        return;
+
+    // Read the complete 7-byte function record
+    flash_.read(address, payload, 7);
 }
 
-void SwitchPanel::setKeyFunction(uint8_t *payload, uint8_t button, uint8_t function)
+void SwitchPanel::setKeyFunction(const uint8_t *payload, uint8_t button, uint8_t function)
 {
-    flash_.update(flash_.findAdrress(MemoryAdress::Touch::SECTOR_FUNCTIONS, MemoryAdress::Touch::channelFunction(button, function)), payload + 2, 7);
+    const uint32_t address = KeyStorageLayout::functionAddress( button, function);
 
-    getKeyFunction(payload, button, function);
+    if (address == UINT32_MAX)
+        return;
+
+    // Read the complete 7-byte function record
+    flash_.update(address, payload, 7);
 }
 
 uint8_t SwitchPanel::getOperationLen(uint8_t type)
@@ -213,8 +220,7 @@ uint16_t SwitchPanel::getOperationCode(uint8_t type)
 
 uint8_t SwitchPanel::makeFunction(FunctionPacket &packet, uint8_t type, uint8_t state, const uint8_t *function)
 {
-
-    uint8_t len = getOperationLen(function[0]) + 4;
+    uint8_t len = getOperationLen(function[0]);
     uint8_t keytype = getKeyType(type);
 
     packet.dstAddress = (static_cast<uint16_t>(function[1]) << 8) | function[2];
@@ -236,8 +242,8 @@ uint8_t SwitchPanel::makeFunction(FunctionPacket &packet, uint8_t type, uint8_t 
     case OperationType::SingleChannelControl:
         packet.data[0] = function[3];
         packet.data[1] = state ? 0x64 : 0x00;
-        packet.data[2] = function[5];
-        packet.data[3] = function[6];
+        packet.data[2] = 0;
+        packet.data[3] = 0;
         break;
 
     case OperationType::CurtainSwitch:

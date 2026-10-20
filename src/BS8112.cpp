@@ -25,6 +25,8 @@ void BS8112::mapKeys(const uint8_t *pads, uint8_t count)
 
 bool BS8112::begin(uint8_t threshold)
 {
+    wire_.begin();
+
     state_ = 0;
     prevState_ = 0;
     pressedEdge_ = 0;

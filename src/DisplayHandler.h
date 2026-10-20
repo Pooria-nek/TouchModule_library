@@ -113,6 +113,7 @@ public:
 
     void clear();
     void send();
+    void drawStr(int8_t x, int8_t y, const char *text);
 
     uint8_t getPage() const { return currentPage; }
 
@@ -148,7 +149,7 @@ public:
 
     // void setSleepTime(uint8_t brightness);  // sleep time 10 to 99 -> 100 = always on
     // void setSleeplevel(uint8_t brightness); // sleep level
-    void setReturnPage(uint8_t page);       // page number (0 = return off)
+    void setReturnPage(uint8_t page); // page number (0 = return off)
 
 private:
     MemoryCore &flash_;

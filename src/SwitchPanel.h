@@ -6,6 +6,8 @@
 #include "BusproDevice.h"
 #include "MemoryCore.h"
 
+#include "KeyFunctionStorage.h"
+
 class SwitchPanel
 {
 public:
@@ -72,7 +74,7 @@ public:
     void keyTypeFetch();
 
     void getKeyFunction(uint8_t *payload, uint8_t button, uint8_t function);
-    void setKeyFunction(uint8_t *payload, uint8_t button, uint8_t function);
+    void setKeyFunction(const uint8_t *payload, uint8_t button, uint8_t function);
 
     uint16_t getOperationCode(uint8_t type);
     uint8_t getOperationLen(uint8_t type);
@@ -107,8 +109,20 @@ public:
     //     uint8_t button,
     //     uint8_t *response);
 
+    static constexpr bool isType(uint8_t type, SwitchType expected)
+    {
+        return type == static_cast<uint8_t>(expected);
+    }
+
+    static constexpr bool isType(uint8_t type, OperationType expected)
+    {
+        return type == static_cast<uint8_t>(expected);
+    }
+
 private:
     MemoryCore &flash_;
 
     SwitchType keytype_[16] = {SwitchType::Invalid};
+
+    using KeyStorageLayout = KeyFunctionStorage<130>;
 };
