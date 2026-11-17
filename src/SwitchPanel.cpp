@@ -34,14 +34,14 @@ void SwitchPanel::setKeyType(uint8_t key, SwitchType type)
     keytype_[key] = type;
 }
 
-// SwitchPanel::SwitchType SwitchPanel::getKeyType(uint8_t key)
-// {
-//     if (key >= 16)
-//         return SwitchType::Invalid;
-//     return keytype_[key];
-// }
+SwitchPanel::SwitchType SwitchPanel::getKeyType(uint8_t key)
+{
+    if (key >= 16)
+        return SwitchType::Invalid;
+    return keytype_[key];
+}
 
-uint8_t SwitchPanel::getKeyType(uint8_t key)
+uint8_t SwitchPanel::getKeyTypeUINT(uint8_t key)
 {
     if (key > 16)
         return static_cast<uint8_t>(SwitchType::Invalid);
@@ -52,7 +52,7 @@ uint8_t SwitchPanel::getKeyType(uint8_t key)
 // 9 byte return
 void SwitchPanel::getKeyFunction(uint8_t *payload, uint8_t button, uint8_t function)
 {
-    const uint32_t address = KeyStorageLayout::functionAddress( button, function);
+    const uint32_t address = KeyStorageLayout::functionAddress(button, function);
 
     if (address == UINT32_MAX)
         return;
@@ -63,7 +63,7 @@ void SwitchPanel::getKeyFunction(uint8_t *payload, uint8_t button, uint8_t funct
 
 void SwitchPanel::setKeyFunction(const uint8_t *payload, uint8_t button, uint8_t function)
 {
-    const uint32_t address = KeyStorageLayout::functionAddress( button, function);
+    const uint32_t address = KeyStorageLayout::functionAddress(button, function);
 
     if (address == UINT32_MAX)
         return;
@@ -116,7 +116,7 @@ uint8_t SwitchPanel::getOperationLen(uint8_t type)
     // param 3 -> par2
     // param 4 -> ---
     case OperationType::PanelControl:
-        return 3;
+        return 4;
 
     // param 1 -> All Zone
     // param 2 -> Scene no
@@ -127,40 +127,40 @@ uint8_t SwitchPanel::getOperationLen(uint8_t type)
     // param 2 -> Channel no
     // param 3 -> Running time
     case OperationType::BroadcastChannel:
-        return 3;
+        return UINT8_MAX;
 
     // param 1 -> Zone no
     // param 2 -> Mode
     case OperationType::SecurityModule:
-        return 2;
+        return UINT8_MAX;
 
     // param 1 -> par1
     // param 2 -> par2
     // param 3 -> par3
     case OperationType::MusicControl:
-        return 3;
+        return UINT8_MAX;
 
     // param 1 -> par1
     // param 2 -> par2
     case OperationType::UniversalControl:
-        return 2;
+        return UINT8_MAX;
 
     // param 1 -> par1
     // param 2 -> par2
     // param 3 -> par3
     case OperationType::InfraredControl:
-        return 3;
+        return UINT8_MAX;
 
     // param 1 -> Logic Light no
     // param 2 -> Intensity
     // param 3 -> color no
     // param 4 -> Duration[s]
     case OperationType::LogicLightAdjust:
-        return 4;
+        return UINT8_MAX;
 
     case OperationType::Invalid:
     default:
-        return 0;
+        return UINT8_MAX;
     }
 }
 
@@ -172,19 +172,19 @@ uint16_t SwitchPanel::getOperationCode(uint8_t type)
         return BusproOp::SCENE_CONTROL.req();
 
     case OperationType::Sequence:
-        return UINT16_MAX;
+        return BusproOp::SEQUENCE_CONTROL.req();
 
     case OperationType::TimerSwitch:
         return UINT16_MAX;
 
     case OperationType::UniversalSwitch:
-        return UINT16_MAX;
+        return BusproOp::UNIVERSAL_SWITCH.req();
 
     case OperationType::SingleChannelControl:
         return BusproOp::CONTROL_SINGLE.req();
 
     case OperationType::CurtainSwitch:
-        return UINT16_MAX;
+        return BusproOp::CURTAIN_CONTROL.req();
 
     case OperationType::GPRSControl:
         return UINT16_MAX;
@@ -221,7 +221,6 @@ uint16_t SwitchPanel::getOperationCode(uint8_t type)
 uint8_t SwitchPanel::makeFunction(FunctionPacket &packet, uint8_t type, uint8_t state, const uint8_t *function)
 {
     uint8_t len = getOperationLen(function[0]);
-    uint8_t keytype = getKeyType(type);
 
     packet.dstAddress = (static_cast<uint16_t>(function[1]) << 8) | function[2];
     packet.oprCode = getOperationCode(function[0]);
@@ -230,25 +229,82 @@ uint8_t SwitchPanel::makeFunction(FunctionPacket &packet, uint8_t type, uint8_t 
     {
     case OperationType::Scene:
         packet.data[0] = function[3];
-        packet.data[1] = function[4];
+        switch (type)
+        {
+        case static_cast<uint8_t>(SwitchType::SingleOFF):
+        case static_cast<uint8_t>(SwitchType::CombinationOFF):
+            packet.data[1] = 0x00;
+            break;
+
+        case static_cast<uint8_t>(SwitchType::SingleONOFF):
+        case static_cast<uint8_t>(SwitchType::CombinationONOFF):
+            packet.data[1] = state ? function[4] : 0x00;
+            break;
+
+        case static_cast<uint8_t>(SwitchType::SingleON):
+        case static_cast<uint8_t>(SwitchType::CombinationON):
+        case static_cast<uint8_t>(SwitchType::DblclickSingle):
+        case static_cast<uint8_t>(SwitchType::DblclickCombined):
+        case static_cast<uint8_t>(SwitchType::ShortLongPress):
+        case static_cast<uint8_t>(SwitchType::ShortLongJog):
+            packet.data[1] = function[4];
+            break;
+        }
+
         break;
 
     case OperationType::Sequence:
     case OperationType::TimerSwitch:
     case OperationType::UniversalSwitch:
-        len = UINT8_MAX;
+        packet.data[0] = function[3];
+        packet.data[1] = function[4];
         break;
 
     case OperationType::SingleChannelControl:
         packet.data[0] = function[3];
-        packet.data[1] = state ? 0x64 : 0x00;
-        packet.data[2] = 0;
-        packet.data[3] = 0;
+
+        switch (type)
+        {
+        case static_cast<uint8_t>(SwitchType::SingleON):
+        case static_cast<uint8_t>(SwitchType::CombinationON):
+            packet.data[1] = 0x64;
+            break;
+
+        case static_cast<uint8_t>(SwitchType::SingleOFF):
+        case static_cast<uint8_t>(SwitchType::CombinationOFF):
+            packet.data[1] = 0x00;
+            break;
+
+        case static_cast<uint8_t>(SwitchType::SingleONOFF):
+        case static_cast<uint8_t>(SwitchType::CombinationONOFF):
+        case static_cast<uint8_t>(SwitchType::DblclickSingle):
+            packet.data[1] = state ? 0x64 : 0x00;
+            break;
+
+        case static_cast<uint8_t>(SwitchType::DblclickCombined):
+        case static_cast<uint8_t>(SwitchType::ShortLongPress):
+        case static_cast<uint8_t>(SwitchType::ShortLongJog):
+            packet.data[1] = function[4];
+            break;
+        }
+
+        packet.data[2] = function[5];
+        packet.data[3] = function[6];
         break;
 
     case OperationType::CurtainSwitch:
     case OperationType::GPRSControl:
+        packet.data[0] = function[3];
+        packet.data[1] = function[4];
+        break;
+
     case OperationType::PanelControl:
+        packet.data[0] = function[3];
+        packet.data[1] = function[4];
+        packet.data[2] = function[5];
+        packet.data[3] = function[6];
+        break;
+
     case OperationType::BroadcastScene:
     case OperationType::BroadcastChannel:
     case OperationType::SecurityModule:
@@ -256,7 +312,10 @@ uint8_t SwitchPanel::makeFunction(FunctionPacket &packet, uint8_t type, uint8_t 
     case OperationType::UniversalControl:
     case OperationType::InfraredControl:
     case OperationType::LogicLightAdjust:
-        len = UINT8_MAX;
+        // packet.data[0] = function[3];
+        // packet.data[1] = function[4];
+        // packet.data[2] = function[5];
+        // packet.data[3] = function[6];
         break;
 
     default:

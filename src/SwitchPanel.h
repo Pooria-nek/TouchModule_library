@@ -44,17 +44,19 @@ public:
         TimerSwitch = 0x57,          // param 1 -> Switch no      | param 2 -> Switch Statue | param 3 -> ---          | param 4 -> ---
         UniversalSwitch = 0x58,      // param 1 -> Switch no      | param 2 -> Switch Statue | param 3 -> ---          | param 4 -> ---
         SingleChannelControl = 0x59, // param 1 -> Channel no     | param 2 -> Intensity     | param 3 -> Running time | param 4 -> ---
-        CurtainSwitch = 0x60,        // param 1 -> Curtain no     | param 2 -> Switch Status | param 3 -> ---          | param 4 -> ---
-        GPRSControl = 0x61,          // param 1 -> Message        | param 2 -> no            | param 3 -> ---          | param 4 -> ---
-        PanelControl = 0x62,         // param 1 -> Function       | param 2 -> par1          | param 3 -> par2         | param 4 -> ---
-        BroadcastScene = 0x63,       // param 1 -> All Zone       | param 2 -> Scene no      | param 3 -> ---          | param 4 -> ---
-        BroadcastChannel = 0x64,     // param 1 -> All Channel    | param 2 -> Channel no    | param 3 -> Running time | param 4 -> ---
-        SecurityModule = 0x65,       // param 1 -> Zone no        | param 2 -> Mode          | param 3 -> ---          | param 4 -> ---
-        MusicControl = 0x67,         // param 1 -> par1           | param 2 -> par2          | param 3 -> par3         | param 4 -> ---
-        UniversalControl = 0x68,     // param 1 -> par1           | param 2 -> par2          | param 3 -> ---          | param 4 -> ---
-        InfraredControl = 0x69,      // param 1 -> par1           | param 2 -> par2          | param 3 -> par3         | param 4 -> ---
-        LogicLightAdjust = 0x70,     // param 1 -> Logic Light no | param 2 -> Intensity     | param 3 -> color no     | param 4 -> Duration[s]
-        Invalid = 0x00               // anything else it invalid
+        // CurtainSwitch = 0x60,        // param 1 -> Curtain no     | param 2 -> Switch Status | param 3 -> ---          | param 4 -> ---
+        CurtainSwitch = 0x5C, // param 1 -> Curtain no     | param 2 -> Switch Status | param 3 -> ---          | param 4 -> ---
+        GPRSControl = 0x61,   // param 1 -> Message        | param 2 -> no            | param 3 -> ---          | param 4 -> ---
+        PanelControl = 0x5F,  // param 1 -> Function       | param 2 -> par1          | param 3 -> par2
+        // PanelControl = 0x62,         // param 1 -> Function       | param 2 -> par1          | param 3 -> par2         | param 4 -> ---
+        BroadcastScene = 0x63,   // param 1 -> All Zone       | param 2 -> Scene no      | param 3 -> ---          | param 4 -> ---
+        BroadcastChannel = 0x64, // param 1 -> All Channel    | param 2 -> Channel no    | param 3 -> Running time | param 4 -> ---
+        SecurityModule = 0x65,   // param 1 -> Zone no        | param 2 -> Mode          | param 3 -> ---          | param 4 -> ---
+        MusicControl = 0x67,     // param 1 -> par1           | param 2 -> par2          | param 3 -> par3         | param 4 -> ---
+        UniversalControl = 0x68, // param 1 -> par1           | param 2 -> par2          | param 3 -> ---          | param 4 -> ---
+        InfraredControl = 0x69,  // param 1 -> par1           | param 2 -> par2          | param 3 -> par3         | param 4 -> ---
+        LogicLightAdjust = 0x70, // param 1 -> Logic Light no | param 2 -> Intensity     | param 3 -> color no     | param 4 -> Duration[s]
+        Invalid = 0x00           // anything else it invalid
     };
 
     struct FunctionPacket
@@ -80,8 +82,8 @@ public:
     uint8_t getOperationLen(uint8_t type);
 
     void setKeyType(uint8_t key, SwitchType type);
-    // SwitchType getKeyType(uint8_t key);
-    uint8_t getKeyType(uint8_t key);
+    SwitchType getKeyType(uint8_t key);
+    uint8_t getKeyTypeUINT(uint8_t key);
 
     uint8_t makeFunction(FunctionPacket &packet, uint8_t type, uint8_t state, const uint8_t *function);
 

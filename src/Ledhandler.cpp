@@ -206,6 +206,10 @@ void LedHandler<CHANNEL_COUNT>::setLedMode(
 
     CriticalSection cs;
 
+    // No update if the mode is already active.
+    if (ledMode_[channel] == mode)
+        return;
+
     // Remember the mode to return to after a one-shot Blink.
     // Do not overwrite it when re-triggering Blink during a Blink,
     // otherwise the LED would return to "Blink" forever.

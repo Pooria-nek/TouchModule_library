@@ -9,7 +9,6 @@
 
 #include <stdint.h>
 
-#include "helpers.h"
 #include "LedHandler.h"
 #include "DisplayHandler.h"
 #include "BuzzerHandler.h"
@@ -211,8 +210,8 @@ public:
 
     TouchModule(TwoWire &wirePort, BusproTransport &bus, MemoryCore &flash, const uint8_t touchPins[TOUCH_PAD_COUNT], const uint8_t touchPads[TOUCH_PAD_COUNT], bool activeHigh = true);
 
-    NTC ntc1;
-    NTC ntc2;
+    NTC relayNtc;
+    NTC outsideNtc;
 
     bool begin();
 
@@ -306,9 +305,7 @@ public:
 private:
     static constexpr const char *FACTORY_NAME = "Zeller Z27";
     static constexpr const char *HARDWARE_VERSION = "Z27-v5.0";
-    static constexpr const char *SOFTWARE_VERSION = "v1.5.0b"
-                                                    " "__DATE__
-                                                    " ";
+    static constexpr const char *SOFTWARE_VERSION = "v1.8.0b " __DATE__;
     // static constexpr const char *SOFTWARE_VERSION = __DATE__ " " __TIME__;
 
     using KeyStorageLayout = KeyFunctionStorage<130>;
@@ -333,7 +330,9 @@ private:
     BusproTransport &bus_;
     MemoryCore &flash_;
 
-    uint16_t deviceAddress_ = 0x0140;
+    const uint16_t defultAddress = 0x010C;
+
+    uint16_t deviceAddress_ = defultAddress;
     uint8_t fuid_[12];
     uint8_t uid_[12];
     uint16_t devType_ = TOUCH_TYPE; // gang device type per HDL spec
@@ -372,6 +371,7 @@ private:
     // whatever this holds without keeping its own copy.
     HVACPanel hvac_;
 
+    FloorHeatPanel fheat_;
     // floorheat
 
     bool fheatPower[8] = {
@@ -464,10 +464,16 @@ private:
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+    void updateChannelLED(uint16_t srcAddress, uint8_t channel, bool state);
+
     ////////////////////////////////////////////////////////////////////////////////
     //////////////////////////////// DLP Functions /////////////////////////////////
 
     void handlePanelControl(const BusproFrame &frame);
+
+    void handleReadTemp(const BusproFrame &frame);
+
+    void handleUpdateHvac(const BusproFrame &frame);
 
     void handleRestore(const BusproFrame &frame);
     void handleRestoreUNK(const BusproFrame &frame);
@@ -492,8 +498,8 @@ private:
     void handleReadPtempFlag(const BusproFrame &frame);
     void handleModifyPtempFlag(const BusproFrame &frame);
 
-    void handleReadPOpration5(const BusproFrame &frame);
-    void handleModifyPOpration5(const BusproFrame &frame);
+    void handleReadReturnPage(const BusproFrame &frame);
+    void handleModifyReturnPage(const BusproFrame &frame);
 
     void handleReadTimeDate(const BusproFrame &frame);
     void handleModifyTimeDate(const BusproFrame &frame);
@@ -558,6 +564,11 @@ private:
 
     void handleReadFHInfo(const BusproFrame &frame);
     void handleModifyFHInfo(const BusproFrame &frame);
+
+    void handleReadFHState(const BusproFrame &frame);
+    void handleModifyFHState(const BusproFrame &frame);
+
+    void handleModifyFHConfig(const BusproFrame &frame);
 
     //////////////////////////////////// MUSIC //////////////////////////////////////
 
@@ -630,6 +641,7 @@ private:
     void handleReadDeviceRemark(const BusproFrame &frame);
     void handleModifyDeviceRemark(const BusproFrame &frame);
 
+    void handleStateChannel(const BusproFrame &frame);
     void handleSingleChannel(const BusproFrame &frame);
     void handleSceneControl(const BusproFrame &frame);
 };

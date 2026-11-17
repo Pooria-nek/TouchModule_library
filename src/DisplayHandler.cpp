@@ -43,10 +43,10 @@ void DisplayHandler::updateResource(const HVACPanel &hvac)
     hvacPanel_ = &hvac;
 }
 
-// void DisplayHandler::updateResource(const FHeatPanel &fheat)
-// {
-//     fheatPanel_ = &fheat;
-// }
+void DisplayHandler::updateResource(const FloorHeatPanel &fheat)
+{
+    fheatPanel_ = &fheat;
+}
 
 void DisplayHandler::updateOutTemprature(const NTC &ntc)
 {
@@ -209,7 +209,8 @@ void DisplayHandler::drawContent()
         break;
 
     case 6:
-        drawFloorheatPage();
+        if (fheatPanel_)
+            drawFloorheatPage(*fheatPanel_);
         break;
     }
 
@@ -233,6 +234,79 @@ void DisplayHandler::drawScreen()
 // Idel pages drawer
 // *******************************************************************************************************
 
+// void DisplayHandler::drawScreensaver()
+// {
+//     static uint8_t x = 0;
+//     static uint8_t y = 0;
+
+//     // 0 = internal
+//     // 1 = external
+//     // 2 = both
+//     uint8_t temperatureMode = 1;
+
+//     constexpr uint8_t widgetWidth = 58;
+
+//     uint8_t widgetHeight;
+
+//     if (temperatureMode == 2)
+//         widgetHeight = 40;
+//     else
+//         widgetHeight = 20;
+
+//     x = 5;
+//     y = random(5, 128 - widgetHeight + 1);
+
+//     char buffer[6];
+
+//     // -------------------------
+//     // Internal temperature
+//     // -------------------------
+//     if (temperatureMode == 0)
+//     {
+//         u8g2.setFont(u8g2_font_luBS14_tn);
+
+//         int16_t whole = static_cast<int16_t>(inTemp);
+//         uint8_t decimal = static_cast<uint8_t>(fabsf(inTemp - whole) * 10.0f);
+
+//         snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
+
+//         u8g2.drawStr(x + 17, y + 11, buffer);
+//     }
+
+//     // -------------------------
+//     // External temperature
+//     // -------------------------
+//     if (temperatureMode == 1)
+//     {
+//         int16_t whole = static_cast<int16_t>(outTemp);
+//         uint8_t decimal = static_cast<uint8_t>(fabsf(outTemp - whole) * 10.0f);
+
+//         snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
+
+//         u8g2.setFont(u8g2_font_luBS14_tn);
+//         u8g2.drawStr(x, y, buffer);
+
+//         u8g2.setFont(u8g2_font_6x10_tr);
+//         u8g2.drawStr(x + 50, y - 3, "c");
+//     }
+
+//     // -------------------------
+//     // Both temperatures
+//     // -------------------------
+//     if (temperatureMode == 2)
+//     {
+//         int16_t whole = static_cast<int16_t>(outTemp);
+
+//         uint8_t decimal = static_cast<uint8_t>(fabsf(outTemp - whole) * 10.0f);
+
+//         snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
+
+//         u8g2.drawXBMP(x, y + 19, 13, 13, external_icon);
+
+//         u8g2.drawStr(x + 17, y + 30, buffer);
+//     }
+// }
+
 void DisplayHandler::drawScreensaver()
 {
     static uint8_t x = 0;
@@ -241,69 +315,56 @@ void DisplayHandler::drawScreensaver()
     // 0 = internal
     // 1 = external
     // 2 = both
-    uint8_t temperatureMode = 1;
+    constexpr uint8_t temperatureMode = 1;
 
     constexpr uint8_t widgetWidth = 58;
+    constexpr uint8_t singleHeight = 20;
+    constexpr uint8_t dualHeight = 40;
 
-    uint8_t widgetHeight;
-
-    if (temperatureMode == 2)
-        widgetHeight = 40;
-    else
-        widgetHeight = 20;
+    const uint8_t widgetHeight =
+        (temperatureMode == 2) ? dualHeight : singleHeight;
 
     x = 5;
     y = random(5, 128 - widgetHeight + 1);
 
-    char buffer[20];
+    char buffer[8];
 
-    // // -------------------------
-    // // Internal temperature
-    // // -------------------------
-    // if (temperatureMode == 0)
-    // {
-    //     u8g2.setFont(u8g2_font_luBS14_tn);
-
-    //     int16_t whole = static_cast<int16_t>(inTemp);
-    //     uint8_t decimal = static_cast<uint8_t>(fabsf(inTemp - whole) * 10.0f);
-
-    //     snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
-
-    //     u8g2.drawStr(x + 17, y + 11, buffer);
-    // }
-
-    // -------------------------
-    // External temperature
-    // -------------------------
-    if (temperatureMode == 1)
+    auto drawTemperature = [&](float temperature, int16_t posX, int16_t posY)
     {
-        int16_t whole = static_cast<int16_t>(outTemp);
-        uint8_t decimal = static_cast<uint8_t>(fabsf(outTemp - whole) * 10.0f);
+        const int16_t whole = static_cast<int16_t>(temperature);
+        const uint8_t decimal =
+            static_cast<uint8_t>(fabsf(temperature - whole) * 10.0f);
 
         snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
 
         u8g2.setFont(u8g2_font_luBS14_tn);
-        u8g2.drawStr(x, y, buffer);
+        u8g2.drawStr(posX, posY, buffer);
+    };
+
+    switch (temperatureMode)
+    {
+    case 0: // Internal
+        drawTemperature(inTemp, x, y + 15);
 
         u8g2.setFont(u8g2_font_6x10_tr);
-        u8g2.drawStr(x + 50, y - 3, "c");
+        u8g2.drawStr(x + 50, y + 12, "c");
+        break;
+
+    case 1: // External
+        drawTemperature(outTemp, x, y + 15);
+
+        u8g2.setFont(u8g2_font_6x10_tr);
+        u8g2.drawStr(x + 50, y + 12, "c");
+        break;
+
+    case 2: // Both
+        drawTemperature(outTemp, x, y + 15);
+
+        // u8g2.drawXBMP(x, y + 19, 13, 13, external_icon);
+
+        drawTemperature(inTemp, x, y + 35);
+        break;
     }
-
-    // // -------------------------
-    // // Both temperatures
-    // // -------------------------
-    // if (temperatureMode == 2)
-    // {
-    //     int16_t whole = static_cast<int16_t>(outTemp);
-
-    //     uint8_t decimal = static_cast<uint8_t>(fabsf(outTemp - whole) * 10.0f);
-
-    //     snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
-
-    //     u8g2.drawXBMP(x, y + 19, 13, 13, external_icon);
-
-    //     u8g2.drawStr(x + 17, y + 30, buffer);
-    // }
 }
 
 void DisplayHandler::sleep()
@@ -421,27 +482,6 @@ void DisplayHandler::drawHvacPower(uint8_t y, uint8_t power)
     u8g2.drawStr(x + 8, y + 19, power_texts[power]);
 }
 
-// void DisplayHandler::drawHvacTemp(uint8_t y, float_t current, float_t sensor)
-// {
-//     u8g2.setFont(u8g2_font_6x10_tf);
-
-//     const uint8_t x = 8;
-//     const uint8_t icon = 13;
-
-//     current = constrain(current, 0.0f, 40.0f);
-//     sensor  = constrain(sensor,  0.0f, 40.0f);
-
-//     u8g2.drawXBMP(x, y + 2, icon, icon, temp_icon);
-//     u8g2.setCursor(30, y + 4);
-//     u8g2.print(current, 1);
-
-//     u8g2.drawXBMP(x, y + 16, icon, icon, internal_icon);
-//     u8g2.setCursor(30, y + 18);
-//     u8g2.print(sensor, 1);
-
-//     u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
-// }
-
 void DisplayHandler::drawHvacTemp(uint8_t y, float_t current, float_t sensor)
 {
     u8g2.setFont(u8g2_font_6x10_tf);
@@ -449,31 +489,52 @@ void DisplayHandler::drawHvacTemp(uint8_t y, float_t current, float_t sensor)
     const uint8_t x = 8;
     const uint8_t icon = 13;
 
-    const bool currentValid = current >= 0.0f && current <= 30.0f;
-    const bool sensorValid = sensor >= 0.0f && sensor <= 30.0f;
+    const bool currentValid = current >= 0.0f && current <= 100.0f;
+    const bool sensorValid = sensor >= 0.0f && sensor <= 100.0f;
 
-    u8g2.drawXBMP(x, y + 2, icon, icon, temp_icon);
-
+    u8g2.drawXBMP(x, y + 2, icon, icon, internal_icon);
     u8g2.setCursor(30, y + 4);
-    // if (currentValid)
-        u8g2.print(current, 1);
-    // else
-    //     u8g2.print("--.-");
-
-    u8g2.drawXBMP(x, y + 16, icon, icon, internal_icon);
-
-    u8g2.setCursor(30, y + 18);
-    // if (sensorValid)
+    if (sensorValid)
         u8g2.print(sensor, 1);
-    // else
-    //     u8g2.print("--.-");
+    else
+        u8g2.print("--.-");
+
+    u8g2.drawXBMP(x, y + 16, icon, icon, temp_icon);
+    u8g2.setCursor(30, y + 18);
+    if (currentValid)
+        u8g2.print(current, 1);
+    else
+        u8g2.print("--.-");
 
     drawChangePointer(y + 11);
 
     u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
 }
 
-void DisplayHandler::drawHvacSpeed(uint8_t y, uint8_t speed, bool autos)
+void DisplayHandler::drawTemp(uint8_t y, float_t sensor)
+{
+    u8g2.setFont(u8g2_font_luBS14_tn);
+
+    const uint8_t x = 6;
+    const uint8_t icon = 13;
+
+    char buffer[6];
+
+    int16_t whole = static_cast<int16_t>(sensor);
+    uint8_t decimal = static_cast<uint8_t>(fabsf(sensor - whole) * 10.0f);
+
+    snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
+
+    u8g2.setFont(u8g2_font_luBS14_tn);
+    u8g2.drawStr(x, y + 4, buffer);
+
+    u8g2.setFont(u8g2_font_6x10_tr);
+    u8g2.drawStr(x + 50, y + 1, "c");
+
+    u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
+}
+
+void DisplayHandler::drawHvacSpeed(uint8_t y, uint8_t speed, uint8_t bar)
 {
     if (speed > 3)
         return;
@@ -482,54 +543,91 @@ void DisplayHandler::drawHvacSpeed(uint8_t y, uint8_t speed, bool autos)
     const uint8_t x = 8;
     const uint8_t gap = 1;
 
+    // if (autos)
+    // {
+    //     // Speed text
+    //     u8g2.drawStr(x + 10, y + 11, hvac_speed[0]);
+    // }
+    // else
+    // {
     // Speed text
-    u8g2.drawStr(28, y + 11, autos ? hvac_speed[0] : hvac_speed[speed]);
-
-    drawChangePointer(y + 11);
+    u8g2.drawStr(x + 20, y + 11, hvac_speed[speed]);
 
     // Speed bars
-
-    if (speed == 1)
+    if (bar == 0)
+    { // LOW
+        u8g2.drawFrame(x, y + 16, w, 6);
+        u8g2.drawFrame(x + w + gap, y + 12, w, 10);
+        u8g2.drawFrame(x + (w + gap) * 2, y + 8, w, 14);
+    }
+    else if (bar == 1)
     { // HIGH
         u8g2.drawBox(x, y + 16, w, 6);
         u8g2.drawBox(x + w + gap, y + 12, w, 10);
         u8g2.drawBox(x + (w + gap) * 2, y + 8, w, 14);
     }
-    else if (speed == 2)
+    else if (bar == 2)
     { // MEDI
         u8g2.drawBox(x, y + 16, w, 6);
         u8g2.drawBox(x + w + gap, y + 12, w, 10);
         u8g2.drawFrame(x + (w + gap) * 2, y + 8, w, 14);
     }
-    else if (speed == 3)
+    else if (bar == 3)
     { // LOW
         u8g2.drawBox(x, y + 16, w, 6);
         u8g2.drawFrame(x + w + gap, y + 12, w, 10);
         u8g2.drawFrame(x + (w + gap) * 2, y + 8, w, 14);
     }
+    // }
+
+    drawChangePointer(y + 11);
 }
 
 #ifdef OLDIE
 void DisplayHandler::drawHvacPage(const HVACPanel &hvac)
 {
-    // if (!hvacPanel_)
-    //     return; // update(hvac) hasn't been called yet — nothing to draw
+    if (!hvacPanel_)
+        return; // update(hvac) hasn't been called yet — nothing to draw
 
     const HVACPanel::State &state = hvac.currentState();
 
-    uint8_t currentHvac = hvac.currentHvac();
+    uint8_t currentHvac = hvac.currentUnit();
 
     // put mode icon in left and power in right
     u8g2.setDrawColor(1);
 
-    drawHvacMode(0, state.mode);
-
     drawHvacPower(0, state.power ? 1 : 0);
 
-    // top = target (set) temp, bottom = live sensor (current) temp
-    drawHvacTemp(30, state.setTemp, state.currentTemp);
+    if (state.power)
+    {
+        drawHvacMode(0, state.mode);
 
-    drawHvacSpeed(60, state.fan, state.fan == 0);
+        float setTemp = 0.0f;
+
+        switch (state.mode)
+        {
+        case 0: // Cool
+            setTemp = state.setTempCool;
+            break;
+
+        case 1: // Heat
+            setTemp = state.setTempHeat;
+            break;
+
+        case 2: // Auto
+            setTemp = state.setTempAuto;
+            break;
+        }
+
+        // top = target (set) temp, bottom = live sensor (current) temp
+        drawHvacTemp(30, setTemp, state.currentTemp);
+
+        drawHvacSpeed(60, state.fan, state.autofan);
+    }
+    else
+    {
+        drawTemp(50, state.currentTemp);
+    }
 
     // Current HVAC image
     u8g2.drawXBMP(0, 90, 64, 30, hvac.currentImage());
@@ -538,146 +636,6 @@ void DisplayHandler::drawHvacPage(const HVACPanel &hvac)
     // u8g2.drawHLine(0, 30, 64);
     // u8g2.drawHLine(0, 60, 64);
     // u8g2.drawHLine(0, 90, 64);
-}
-#endif
-
-#ifdef MODERN
-void DisplayHandler::drawHvacPage()
-{
-    if (!hvacPanel_)
-        return; // update(hvac) hasn't been called yet — nothing to draw
-
-    const HVACPanel::State &state = hvacPanel_->currentState();
-    const uint8_t zoneIndex = hvacPanel_->current();
-
-    constexpr uint8_t SCREEN_W = 64;
-    constexpr uint8_t SCREEN_H = 120;
-
-    // ---------------------------------------------------------
-    // AC layout
-    // ---------------------------------------------------------
-
-    // Top separator
-    u8g2.drawHLine(0, 14, SCREEN_W);
-
-    // Bottom separators
-    u8g2.drawHLine(0, 92, SCREEN_W);
-    u8g2.drawHLine(0, 112, SCREEN_W);
-
-    // ---------------------------------------------------------
-    // Header
-    // ---------------------------------------------------------
-
-    u8g2.setFont(u8g2_font_synchronizer_nbp_tr);
-
-    // AC name / number
-    String acName = "AC " + String(zoneIndex + 1);
-
-    drawCenteredTextH(8, acName.c_str());
-
-    // Power status
-    if (state.power)
-    {
-        u8g2.setDrawColor(1);
-        u8g2.drawGlyph(3, 10, 235); // power icon
-    }
-    else
-    {
-        u8g2.setDrawColor(1);
-        u8g2.drawStr(3, 9, "OFF");
-    }
-
-    // ---------------------------------------------------------
-    // Temperature
-    // ---------------------------------------------------------
-
-    // Current temperature
-    u8g2.setFont(u8g2_font_helvB14_tr);
-
-    String currentTemp = String(state.currentTemp, 1);
-    drawCenteredTextH(45, currentTemp.c_str());
-
-    // Degree symbol
-    u8g2.setFont(u8g2_font_synchronizer_nbp_tr);
-    u8g2.drawStr(50, 37, "C");
-
-    // Set temperature
-    u8g2.setFont(u8g2_font_helvB10_tr);
-
-    String setTemp = String(state.setTemp, 1);
-    drawCenteredTextH(67, setTemp.c_str());
-
-    // ---------------------------------------------------------
-    // Mode
-    // ---------------------------------------------------------
-
-    u8g2.setFont(u8g2_font_synchronizer_nbp_tr);
-
-    String mode;
-
-    switch (state.mode)
-    {
-    case 0:
-        mode = "Cool";
-        break;
-
-    case 1:
-        mode = "Heat";
-        break;
-
-    case 2:
-        mode = "Dry";
-        break;
-
-    case 3:
-        mode = "Fan";
-        break;
-
-    default:
-        mode = "---";
-        break;
-    }
-
-    drawCenteredTextH(85, mode.c_str());
-
-    // ---------------------------------------------------------
-    // Fan speed
-    // ---------------------------------------------------------
-
-    switch (state.fan)
-    {
-    case 0:
-        drawCenteredTextH(104, "Auto");
-        break;
-
-    case 1:
-        drawCenteredTextH(104, "Low");
-        break;
-
-    case 2:
-        drawCenteredTextH(104, "Med");
-        break;
-
-    case 3:
-        drawCenteredTextH(104, "High");
-        break;
-
-    default:
-        drawCenteredTextH(104, "---");
-        break;
-    }
-
-    // ---------------------------------------------------------
-    // Navigation arrows
-    // ---------------------------------------------------------
-
-    drawChangePointer(104);
-
-    // ---------------------------------------------------------
-    // Reset draw color
-    // ---------------------------------------------------------
-
-    u8g2.setDrawColor(1);
 }
 #endif
 
@@ -739,19 +697,54 @@ void DisplayHandler::drawFheatMode(uint8_t y, uint8_t mode)
     u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
 }
 
-void DisplayHandler::drawFloorheatPage()
+void DisplayHandler::drawFloorheatPage(const FloorHeatPanel &fheat)
 {
-    // drawCenteredText("Floorheat");
-    // u8g2.drawVLine(32, 0, 30);
+    if (!fheatPanel_)
+        return; // update(floor heat) hasn't been called yet — nothing to draw
 
-    drawFheatPower(0, 1);
-    drawFheatTemp(30, 16.5f, 27.8f);
-    drawFheatMode(60, 1);
+    const FloorHeatPanel::State &state = fheat.currentState();
+
+    // put mode icon in left and power in right
+    u8g2.setDrawColor(1);
+
+    drawFheatPower(0, state.power ? 1 : 0);
+
+    if (state.power)
+    {
+        float setTemp = state.setTemps[state.mode];
+
+        // switch (state.mode)
+        // {
+        // case 0: // Normal
+        //     setTemp = state.setTemps[0];
+        //     break;
+
+        // case 1: // Day
+        //     setTemp = state.setTempDay;
+        //     break;
+
+        // case 2: // Night
+        //     setTemp = state.setTempNight;
+        //     break;
+
+        // case 3: // Away
+        //     setTemp = state.setTempAway;
+        //     break;
+        // }
+
+        drawFheatTemp(30, setTemp, state.currentTemp);
+
+        drawFheatMode(60, state.mode);
+    }
+
+    // Current HVAC image
+    u8g2.drawXBMP(0, 90, 64, 30, fheat.currentImage());
+
     // u8g2.drawHLine(0, 30, 64);
     // u8g2.drawHLine(0, 60, 64);
     // u8g2.drawHLine(0, 90, 64);
 
-    u8g2.setFont(u8g2_font_open_iconic_all_1x_t);
+    // u8g2.setFont(u8g2_font_open_iconic_all_1x_t);
 }
 
 // music page texts

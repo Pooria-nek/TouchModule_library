@@ -24,9 +24,10 @@ TouchModule::TouchModule(
       ,
       // touch_(wirePort),
       hvac_(flash),
+      fheat_(flash),
       switchPanel_(flash),
-      ntc1(PB0, 10000.0f, 1000),
-      ntc2(PB1, 10000.0f, 1000)
+      relayNtc(PB0, 10000.0f, 1000),
+      outsideNtc(PB1, 10000.0f, 1000)
 {
     static_assert(std::is_reference<decltype(bus_)>::value, "bus_ must be a reference");
     touch_.mapKeys(touchPads, TOUCH_PAD_COUNT);
@@ -42,8 +43,8 @@ TouchModule::TouchModule(
 
 bool TouchModule::begin()
 {
-    ntc1.begin();
-    ntc2.begin();
+    relayNtc.begin();
+    outsideNtc.begin();
 
     leds_.begin();
     leds_.startupAnimation(); // start the idle timer from "device ready"
@@ -83,6 +84,7 @@ bool TouchModule::begin()
     }
 
     hvac_.load();
+    fheat_.load();
 
 //     if (apds_.begin() && apds_.enableProximitySensor(true)) // interrupts off for now
 //     {
@@ -154,8 +156,8 @@ void TouchModule::error(const char *text)
 
 void TouchModule::update()
 {
-    ntc1.update();
-    ntc2.update();
+    relayNtc.update();
+    outsideNtc.update();
 
     bool t = touch_.update();
 
@@ -189,14 +191,23 @@ void TouchModule::update()
 
     if (deviceMode_ == DeviceMode::Sleep)
     {
-        display_.updateInTemprature(ntc1);
-        display_.updateOutTemprature(ntc2);
+        display_.updateInTemprature(relayNtc);
+        display_.updateOutTemprature(outsideNtc);
     }
+
+    hvac_.setCurrentTemp(outsideNtc.temperature());
+    fheat_.setCurrentTemp(outsideNtc.temperature());
 
     if (display_.getPage() == 5)
     {
         hvac_.fetchImage();
         display_.updateResource(hvac_);
+    }
+
+    if (display_.getPage() == 6)
+    {
+        fheat_.fetchImage();
+        display_.updateResource(fheat_);
     }
 
     display_.update();
@@ -266,8 +277,17 @@ void TouchModule::buttonUpdate()
         }
     }
 
-    leds_.setLedMode(8, LedHandler<TOUCH_PAD_COUNT>::LedMode::Active);
-    leds_.setLedMode(9, LedHandler<TOUCH_PAD_COUNT>::LedMode::Active);
+    if (functionRunnerState_.active)
+    {
+        leds_.setLedMode(8, LedMode::Blinking);
+        leds_.setLedMode(9, LedMode::Blinking);
+    }
+    else
+    {
+        leds_.setLedMode(8, LedMode::Active);
+        leds_.setLedMode(9, LedMode::Active);
+    }
+
 #endif
 
     const uint8_t page = display_.getPage();
@@ -287,8 +307,6 @@ void TouchModule::buttonUpdate()
         {
             functionRunner(key);
         }
-
-        // Switch pages
     }
     break;
 
@@ -298,6 +316,7 @@ void TouchModule::buttonUpdate()
         bool acted = false;
         uint8_t ledIndex = 0;
 
+        //------------------------------------- change work mode -------------------------------------
         if (touch_.isHoldEdge(0))
         {
             if (hvac_.nextMode())
@@ -307,13 +326,15 @@ void TouchModule::buttonUpdate()
             }
         }
 
-        if (touch_.isHoldEdge(1))
+        //------------------------------------- power -------------------------------------
+        if (touch_.isPressed(1))
         {
             hvac_.togglePower();
             acted = true;
             ledIndex = 1;
         }
 
+        //------------------------------------- set point -------------------------------------
         if (touch_.isPressed(2))
         {
             if (hvac_.decreaseTemp(TEMP_STEP))
@@ -322,7 +343,6 @@ void TouchModule::buttonUpdate()
                 ledIndex = 2;
             }
         }
-
         if (touch_.isPressed(3))
         {
             if (hvac_.increaseTemp(TEMP_STEP))
@@ -332,98 +352,222 @@ void TouchModule::buttonUpdate()
             }
         }
 
+        //------------------------------------- change hvac fan speed -------------------------------------
         if (touch_.isPressed(4))
         {
-            if (hvac_.changeFan(false))
+            if (hvac_.changeFan(true))
             {
                 acted = true;
                 ledIndex = 4;
             }
         }
-
         if (touch_.isPressed(5))
         {
-            if (hvac_.changeFan(true))
+            if (hvac_.changeFan(false))
             {
                 acted = true;
                 ledIndex = 5;
             }
         }
 
+        //------------------------------------- change hvac unit -------------------------------------
         if (touch_.isPressed(6))
         {
-            if (hvac_.changeHvac(false))
+            if (hvac_.changeUnit(false))
             {
                 acted = true;
                 ledIndex = 6;
             }
         }
-
         if (touch_.isPressed(7))
         {
-            if (hvac_.changeHvac(true))
+            if (hvac_.changeUnit(true))
             {
                 acted = true;
                 ledIndex = 7;
             }
         }
 
+        //------------------------------------- Oprations -------------------------------------
         if (acted)
         {
             buzzer_.click();
             leds_.setLedMode(ledIndex, LedHandler<TOUCH_PAD_COUNT>::LedMode::Blink);
+
+            const HVACPanel::State &state = hvac_.currentState();
+
+            const uint16_t hvacAddress = hvac_.address();
+
+            if (state.irEnabled)
+            {
+                uint8_t irCode = 0;
+
+                if (hvac_.power())
+                {
+                    irCode = (state.mode * 51) + ((state.fan > 0 ? state.fan - 1 : 0) * 17) + static_cast<uint8_t>(hvac_.setTemp()) - 13;
+                }
+                else
+                {
+                    irCode = 2;
+                }
+
+                uint8_t payload[2] = {irCode, 0x01};
+
+                // Send IR code here
+                // Replace this with your actual IR transmission function.
+                sendResponse(BusproOp::UNIVERSAL_SWITCH.req(), hvacAddress, payload, sizeof(payload));
+            }
+            else
+            {
+                uint8_t payload[14] = {
+                    0x01,                                                             // AC number
+                    0x00,                                                             // Temp uint
+                    static_cast<uint8_t>(outsideNtc.temperature()),                   // curent temperature
+                    hvac_.getSetTempCool(),                                           // Cool set temperature value
+                    hvac_.getSetTempHeat(),                                           // Heat set temperature value
+                    hvac_.getSetTempAuto(),                                           // Auto set temperature value
+                    0x00,                                                             // Reserved
+                    static_cast<uint8_t>((hvac_.mode() << 4) | (hvac_.fan() & 0x0F)), // AC Mode & Fan Speed                                     // AC Mode & Fan Speed
+                    hvac_.power(),                                                    // HVAC Power
+                    hvac_.mode(),
+                    hvac_.fan(),
+                    0x00, // Reserved
+                    0x00, // Reserved
+                    0x00  // Reserved
+                };
+
+                // SwitchPanel::FunctionPacket hpacket{};
+                // hpacket.size = sizeof(payload);
+                // hpacket.dstAddress = hvacAddress;
+                // hpacket.oprCode = BusproOp::Touch::HVAC_CONTROL.req();
+                // hpacket.data[0] = payload[0];
+                // hpacket.data[1] = payload[1];
+                // hpacket.data[2] = payload[2];
+                // hpacket.data[3] = payload[3];
+                // hpacket.data[4] = payload[4];
+                // hpacket.data[5] = payload[5];
+                // hpacket.data[6] = payload[6];
+                // hpacket.data[7] = payload[7];
+                // hpacket.data[8] = payload[8];
+                // hpacket.data[9] = payload[9];
+                // hpacket.data[10] = payload[10];
+                // hpacket.data[11] = payload[11];
+                // hpacket.data[12] = payload[12];
+                // hpacket.data[13] = payload[13];
+
+                // sendConfirm(hpacket);
+
+                sendResponse(BusproOp::Touch::HVAC_CONTROL.req(), hvacAddress, payload, sizeof(payload));
+            }
         }
     }
     break;
 
     case 6:
     {
-        // //--------------------------------- power -------------------------
-        // if ((isPressed(1) || isPressed(2)))
-        // {
-        //     fheat.togglePower();
-        // }
+        constexpr float TEMP_STEP = 1.0f;
+        bool acted = false;
+        uint8_t ledIndex = 0;
 
-        // //------------------------------------- set point ----------------------------------------------
-        // if (isPressed(3))
-        // {
-        //     fheat.changeTemp(false);
-        // }
-        // if (isPressed(4))
-        // {
-        //     fheat.changeTemp(true);
-        // }
+        //------------------------------------- power -------------------------------------
+        if (touch_.isPressed(0))
+        {
+            fheat_.togglePower();
+            acted = true;
+            ledIndex = 0;
+        }
+        if (touch_.isPressed(1))
+        {
+            fheat_.togglePower();
+            acted = true;
+            ledIndex = 1;
+        }
 
-        // //-------------------------change work mode -------------------------------------
-        // if (isPressed(7)) // change floorheat mode
-        // {
-        //     fheat.changeMode(false);
+        //------------------------------------- set point -------------------------------------
+        if (touch_.isPressed(2))
+        {
+            if (fheat_.decreaseTemp(TEMP_STEP))
+            {
+                acted = true;
+                ledIndex = 2;
+            }
+        }
+        if (touch_.isPressed(3))
+        {
+            if (fheat_.increaseTemp(TEMP_STEP))
+            {
+                acted = true;
+                ledIndex = 3;
+            }
+        }
 
-        //     // if (floor_heat_power_ddp)
-        //     // {
-        //     //     if (floor_heat_temp_mode > 1)
-        //     //         floor_heat_temp_mode--;
-        //     //     else
-        //     //         floor_heat_temp_mode = 4;
-        //     //     change_floor_heat_mode_switch();
-        //     //     // showtemp_flag = true;
-        //     // }
-        // }
+        //------------------------------------- change work mode -------------------------------------
+        if (touch_.isPressed(4))
+        {
+            if (fheat_.previousMode())
+            {
+                acted = true;
+                ledIndex = 4;
+            }
+        }
+        if (touch_.isPressed(5))
+        {
+            if (fheat_.nextMode())
+            {
+                acted = true;
+                ledIndex = 5;
+            }
+        }
 
-        // if (isPressed(8)) // change floorheat mode
-        // {
-        //     fheat.changeMode(true);
+        //------------------------------------- change floor heat unit -------------------------------------
+        if (touch_.isPressed(6))
+        {
+            if (fheat_.changeUnit(false))
+            {
+                acted = true;
+                ledIndex = 6;
+            }
+        }
+        if (touch_.isPressed(7))
+        {
+            if (fheat_.changeUnit(true))
+            {
+                acted = true;
+                ledIndex = 7;
+            }
+        }
 
-        //     // if (floor_heat_power_ddp)
-        //     // {
-        //     //     if (floor_heat_temp_mode < 4)
-        //     //         floor_heat_temp_mode++;
-        //     //     else
-        //     //         floor_heat_temp_mode = 1;
-        //     //     change_floor_heat_mode_switch();
-        //     //     // showtemp_flag = true;
-        //     // }
-        // }
+        //------------------------------------- Oprations -------------------------------------
+        if (acted)
+        {
+            buzzer_.click();
+            leds_.setLedMode(ledIndex, LedHandler<TOUCH_PAD_COUNT>::LedMode::Blink);
+
+            const FloorHeatPanel::State &state = fheat_.currentState();
+
+            const uint16_t fHeatAddress = (static_cast<uint16_t>(state.deviceSn) << 8) | state.deviceId;
+
+            if (ledIndex == 0 | ledIndex == 1)
+            {
+                uint8_t payload[3] = {0x14, state.power, state.channel};
+
+                sendResponse(BusproOp::Touch::PANEL_CONTROL.req(), fHeatAddress, payload, sizeof(payload));
+            }
+
+            if (ledIndex == 2 | ledIndex == 3)
+            {
+                uint8_t payload[3] = {0x17 + state.mode, state.setTemps[state.mode], state.channel};
+
+                sendResponse(BusproOp::Touch::PANEL_CONTROL.req(), fHeatAddress, payload, sizeof(payload));
+            }
+
+            if (ledIndex == 4 | ledIndex == 5)
+            {
+                uint8_t payload[3] = {0x15, state.mode + 1, state.channel};
+
+                sendResponse(BusproOp::Touch::PANEL_CONTROL.req(), fHeatAddress, payload, sizeof(payload));
+            }
+        }
     }
     break;
     }
@@ -468,7 +612,7 @@ void TouchModule::functionRunner(uint16_t key)
     uint8_t separate = getSplitButton(key);
     uint8_t merged = getMergedButton(key);
 
-    uint8_t keyType = switchPanel_.getKeyType(merged);
+    uint8_t keyType = switchPanel_.getKeyTypeUINT(merged);
 
     using SwitchType = SwitchPanel::SwitchType;
 
@@ -517,20 +661,20 @@ void TouchModule::functionRunner(uint16_t key)
 
     case SwitchType::Invalid:
     default:
-        ledState[merged * 2] = 0;
-        ledState[merged * 2 + 1] = 0;
+        // ledState[merged * 2] = 0;
+        // ledState[merged * 2 + 1] = 0;
         return;
     }
 
-    if (isMerge)
-    {
-        ledState[merged * 2] = !ledState[merged * 2];
-        ledState[merged * 2 + 1] = !ledState[merged * 2 + 1];
-    }
-    else
-    {
-        ledState[separate] = !ledState[separate];
-    }
+    // if (isMerge)
+    // {
+    //     ledState[merged * 2] = !ledState[merged * 2];
+    //     ledState[merged * 2 + 1] = !ledState[merged * 2 + 1];
+    // }
+    // else
+    // {
+    //     ledState[separate] = !ledState[separate];
+    // }
 
     buzzer_.click();
 
@@ -581,6 +725,7 @@ void TouchModule::updateFunctionRunner()
         functionRunnerState_.waitingConfirm = false;
     }
 
+    // 2. Process functions
     uint8_t processed = 0;
 
     while (functionRunnerState_.functionIndex <= functionRunnerState_.functionEnd &&
@@ -632,24 +777,6 @@ void TouchModule::updateFunctionRunner()
     // Finished
     if (functionRunnerState_.functionIndex >= functionRunnerState_.functionEnd)
     {
-
-        if (functionRunnerState_.functionExecuting)
-        {
-            if (functionRunnerState_.isMerge)
-            {
-                uint8_t merged = functionRunnerState_.keyNumber;
-
-                // ledState[(merged * 2)] = 0x00;
-                // ledState[(merged * 2) + 1] = 0x00;
-            }
-            else
-            {
-                uint8_t separate = functionRunnerState_.keyNumber;
-
-                // ledState[separate] = 0x00;
-            }
-        }
-
         functionRunnerState_.active = false;
         functionRunnerState_.functionExecuting = false;
         functionRunnerState_.waitingConfirm = false;
@@ -708,15 +835,16 @@ bool TouchModule::reMatch()
 
 bool TouchModule::init()
 {
+    deviceAddress_ = defultAddress;
     uint8_t payload[2] = {static_cast<uint8_t>(deviceAddress_ >> 8), static_cast<uint8_t>(deviceAddress_ & 0xFF)};
     flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_ADDRESS), payload, sizeof(payload));
 
     uint8_t payload1[2] = {static_cast<uint8_t>(devType_ >> 8), static_cast<uint8_t>(devType_ & 0xFF)};
     flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_TYPE), payload1, sizeof(payload1));
 
-    // // MCU UID
-    // const uint8_t *uid = mcu::getMcuUID();
-    // flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_TYPE), uid, mcu::MCU_UID_LEN);
+    // MCU UID
+    const uint8_t *uid = reinterpret_cast<const uint8_t *>(0x1FFFF7E8U);
+    flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_MAC_ADDRESS), uid, sizeof(uid));
 
     // uint8_t fuid_[12];
     // flash_.write(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_MAC_ADDRESS), fuid_, sizeof(fuid_));
@@ -754,7 +882,7 @@ bool TouchModule::syncValues()
     flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_ADDRESS), payload, 2);
     deviceAddress_ = (static_cast<uint16_t>(payload[0]) << 8) | payload[1];
 
-    // flash_.readObject(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_MAC_ADDRESS), uid_);
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_MAC_ADDRESS), uid_, sizeof(uid_));
 
     // flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::CHANNEL_MODE), payload, LOGICAL_BUTTON_COUNT);
     // flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::CHANNEL_STATUE), payload, LOGICAL_BUTTON_COUNT);
@@ -885,12 +1013,26 @@ void TouchModule::process(const BusproFrame &frame)
             handleReadDeviceRemark(frame);
             break;
 
+            //////////////////////////////////// RESPONDS //////////////////////////////////////
+
         case BusproOp::CONTROL_SINGLE.resp():
             handleSingleChannel(frame);
             break;
 
+        case BusproOp::CHANNEL_STATE:
+            handleStateChannel(frame);
+            break;
+
         case BusproOp::SCENE_CONTROL.resp():
             handleSceneControl(frame);
+            break;
+
+        case BusproOp::Touch::HVAC_CONTROL.resp():
+            handleUpdateHvac(frame);
+            break;
+
+        case BusproOp::Touch::PANEL_CONTROL.resp():
+            handlePanelControl(frame);
             break;
         }
     }
@@ -981,10 +1123,10 @@ void TouchModule::process(const BusproFrame &frame)
             break;
 
         case BusproOp::Touch::SLEEPING.readReq():
-            handleReadPOpration5(frame);
+            handleReadReturnPage(frame);
             break;
         case BusproOp::Touch::SLEEPING.writeReq():
-            handleModifyPOpration5(frame);
+            handleModifyReturnPage(frame);
             break;
 
         case BusproOp::Touch::TYPE_TIMEDATE.readReq():
@@ -1119,8 +1261,14 @@ void TouchModule::process(const BusproFrame &frame)
             break;
 
         case BusproOp::Touch::FH_STATE.readReq():
+            handleReadFHState(frame);
             break;
         case BusproOp::Touch::FH_STATE.writeReq():
+            handleModifyFHState(frame);
+            break;
+
+        case BusproOp::Touch::FH_CHANNEL_CONFIG.req():
+            handleModifyFHConfig(frame);
             break;
 
             //////////////////////////////////// MUSIC //////////////////////////////////////
@@ -1161,11 +1309,17 @@ void TouchModule::process(const BusproFrame &frame)
             handlePanelControl(frame);
             break;
 
-            // case BusproOp::CONTROL_SINGLE.resp():
-            //     break;
+        case BusproOp::CONTROL_SINGLE.resp():
+            handleSingleChannel(frame);
+            break;
 
             // case BusproOp::SCENE_CONTROL.resp():
             //     break;
+
+        case BusproOp::Touch::READ_TEMP.req():
+            handleReadTemp(frame);
+            break;
+
         default:
             break;
         }
@@ -1217,6 +1371,12 @@ void TouchModule::sendResponse(uint16_t opcode, uint16_t dst, const uint8_t *pay
 
 void TouchModule::sendConfirm(SwitchPanel::FunctionPacket packet)
 {
+    // Execute: first try
+    functionRunnerState_.pendingOp = packet.oprCode;
+    functionRunnerState_.pendingDst = packet.dstAddress;
+    functionRunnerState_.pendingPacket = packet;
+    functionRunnerState_.tries = 1;
+
     bus_.send(deviceAddress_, devType_, packet.oprCode, packet.dstAddress, packet.data, packet.size);
 
     functionRunnerState_.expSrc = packet.dstAddress;
@@ -1338,8 +1498,8 @@ void TouchModule::handleReadEnablePage(const BusproFrame &frame)
 
     flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PAGE_VALID_BASE), payload, 7);
 
-    // payload[5] = payload[6];
-    // payload[6] = payload[5];
+    payload[6] = payload[5];
+    payload[5] = 0;
 
     sendResponse(BusproOp::Touch::PAGE_ENABLE.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1372,7 +1532,7 @@ void TouchModule::handleReadPtempcalibr(const BusproFrame &frame)
     if (frame.payloadLen != 0)
         return;
 
-    uint8_t payload[9] = {}; // stub — no backing state yet; zero rather than leak the stack
+    uint8_t payload[4] = {}; // stub — no backing state yet; zero rather than leak the stack
 
     sendResponse(BusproOp::Touch::TEMP_CALIBRATE.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -1410,16 +1570,18 @@ void TouchModule::handleModifyPtempFlag(const BusproFrame &frame)
     sendResponse(BusproOp::Touch::TEMP_FLAG.writeResp(), frame.srcAddress, payload, sizeof(payload));
 }
 
-void TouchModule::handleReadPOpration5(const BusproFrame &frame)
+void TouchModule::handleReadReturnPage(const BusproFrame &frame)
 {
     if (frame.payloadLen != 0)
         return;
 
-    uint8_t payload[9] = {}; // stub — no backing state yet; zero rather than leak the stack
+    uint8_t payload[6] = {}; // stub — no backing state yet; zero rather than leak the stack
+
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::PAGE_SLEEP_TIME), payload, sizeof(payload));
 
     sendResponse(BusproOp::Touch::SLEEPING.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
-void TouchModule::handleModifyPOpration5(const BusproFrame &frame)
+void TouchModule::handleModifyReturnPage(const BusproFrame &frame)
 {
     if (frame.payloadLen != 8)
         return;
@@ -2007,12 +2169,38 @@ void TouchModule::handleReadHvacIRread(const BusproFrame &frame)
     if (frame.payloadLen != 0)
         return;
 
-    uint8_t payload[1] = {};
+    const uint8_t index = selectedHvacIndex();
+
+    if (index >= HVACPanel::HVAC_COUNT)
+        return;
+
+    const HVACPanel::State &state = hvac_.get(index);
+
+    if (!state.valid)
+        return;
+
+    uint8_t payload[1] = {static_cast<uint8_t>(state.irEnabled)};
 
     sendResponse(BusproOp::Touch::AC_IRREAD.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
 void TouchModule::handleModifyHvacIRread(const BusproFrame &frame)
 {
+    if (frame.payloadLen != 1)
+        return;
+
+    const uint8_t index = selectedHvacIndex();
+
+    if (index >= HVACPanel::HVAC_COUNT)
+        return;
+
+    const uint8_t value = frame.payload[0];
+
+    // Accept only 0 (disabled) or 1 (enabled).
+    if (value > 1)
+        return;
+
+    const bool changed = hvac_.setIrEnabled(index, value != 0);
+
     uint8_t payload[1] = {BusproOp::SUCCESS};
 
     sendResponse(BusproOp::Touch::AC_IRREAD.writeResp(), frame.srcAddress, payload, sizeof(payload));
@@ -2106,10 +2294,61 @@ void TouchModule::handleModifyHvacMember(const BusproFrame &frame)
 
 void TouchModule::handleReadFHInfo(const BusproFrame &frame)
 {
-    // if (frame.payloadLen != 0)
-    //     return;
+    if (frame.payloadLen != 0)
+        return;
 
-    uint8_t payload[9] = {};
+    uint8_t payload[46] = {};
+
+    payload[0] = 1; // floorheat mode
+
+    for (uint8_t i = 0; i < 4; ++i)
+    {
+        const auto &shvac = fheat_.get(i);
+        const uint8_t offset = 1 + (i * 4);
+
+        payload[offset] = shvac.valid ? 0x01 : 0x00; // heating enable
+        payload[offset + 1] = shvac.deviceSn;        // subnet
+        payload[offset + 2] = shvac.deviceId;        // id
+        payload[offset + 3] = shvac.channel;         // channel
+    }
+
+    payload[17] = 0; // temp sensor mode 0-inner sensor 1-read from bus 2-avrage
+
+    payload[18] = 1; // sensor 1 state
+    payload[19] = 0; // sensor 1 subnet
+    payload[20] = 0; // sensor 1 id
+    payload[21] = 0; // sensor 1 channel
+
+    payload[22] = 1; // sensor 2 state
+    payload[23] = 0; // sensor 2 subnet
+    payload[24] = 0; // sensor 2 id
+    payload[25] = 0; // sensor 2 channel
+
+    payload[26] = 0; // protection state
+    payload[27] = 0; // protection subnet
+    payload[28] = 0; // protection id
+    payload[29] = 0; // protection channel
+
+    payload[30] = 0; // outdoor state
+    payload[31] = 0; // outdoor temp subnet
+    payload[32] = 0; // outdoor temp id
+    payload[33] = 0; // outdoor temp channel
+
+    payload[34] = 0; //
+
+    payload[35] = 0;    // output
+    payload[36] = 0;    // min PWM
+    payload[37] = 2;    // heating speed
+    payload[38] = 5;    // control cycle
+    payload[39] = 0x0F; // mode
+    payload[40] = 0;    //
+
+    payload[41] = 9;  // day start HH
+    payload[42] = 30; // day start MM
+    payload[43] = 21; // night start HH
+    payload[44] = 30; // night start MM
+    payload[45] = 0;  //
+    payload[46] = 0;  //
 
     sendResponse(BusproOp::Touch::FH_INFORMATION.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
@@ -2118,9 +2357,77 @@ void TouchModule::handleModifyFHInfo(const BusproFrame &frame)
     // if (frame.payloadLen != 8)
     //     return;
 
-    uint8_t payload[5] = {BusproOp::SUCCESS};
+    uint8_t payload[1] = {BusproOp::SUCCESS};
 
     sendResponse(BusproOp::Touch::FH_INFORMATION.writeResp(), frame.srcAddress, payload, sizeof(payload));
+}
+
+void TouchModule::handleReadFHState(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 0)
+        return;
+
+    uint8_t payload[8] = {};
+
+    payload[1] = {static_cast<uint8_t>(outsideNtc.temperature())};
+    payload[2] = 1; // power
+    payload[3] = 1; // mode
+
+    payload[4] = 21; // manual temp
+    payload[5] = 22; // day temp
+    payload[6] = 23; // night temp
+    payload[7] = 24; //
+    payload[8] = 0;  // away temp
+
+    sendResponse(BusproOp::Touch::FH_STATE.readResp(), frame.srcAddress, payload, sizeof(payload));
+}
+void TouchModule::handleModifyFHState(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 8)
+        return;
+
+    uint8_t payload[1] = {BusproOp::SUCCESS};
+
+    sendResponse(BusproOp::Touch::FH_STATE.writeResp(), frame.srcAddress, payload, sizeof(payload));
+}
+
+void TouchModule::handleModifyFHConfig(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 33)
+        return;
+
+    for (uint8_t i = 0; i < 4; ++i)
+    {
+        const uint8_t offset = i * 4;
+
+        fheat_.setFheatMember(
+            i,
+            frame.payload[offset],
+            frame.payload[offset + 1],
+            frame.payload[offset + 2],
+            frame.payload[offset + 3]);
+
+        fheat_.save(i);
+    }
+
+    // frame.payload[5]; // heating 2 enable
+    // frame.payload[6]; // heating 2 subnet
+    // frame.payload[7]; // heating 2 id
+    // frame.payload[8]; // heating 2 channel
+
+    // frame.payload[9];  // heating 3 enable
+    // frame.payload[10]; // heating 3 subnet
+    // frame.payload[11]; // heating 3 id
+    // frame.payload[12]; // heating 3 channel
+
+    // frame.payload[13]; // heating 4 enable
+    // frame.payload[14]; // heating 4 subnet
+    // frame.payload[15]; // heating 4 id
+    // frame.payload[16]; // heating 4 channel
+
+    uint8_t payload[1] = {BusproOp::SUCCESS};
+
+    sendResponse(BusproOp::Touch::FH_CHANNEL_CONFIG.resp(), frame.srcAddress, payload, sizeof(payload));
 }
 
 //////////////////////////////////// MUSIC //////////////////////////////////////
@@ -2302,9 +2609,107 @@ void TouchModule::handlePanelControl(const BusproFrame &frame)
     if (frame.payloadLen != 3)
         return;
 
-    uint8_t payload[3] = {frame.payload[0], frame.payload[1], frame.payload[2]};
+    if (frame.dstAddress == 0xFFFF)
+    {
+        uint8_t payload[3] = {frame.payload[0], frame.payload[1], frame.payload[2]};
 
-    sendResponse(BusproOp::Touch::PANEL_CONTROL.resp(), frame.srcAddress, payload, sizeof(payload));
+        sendResponse(BusproOp::Touch::PANEL_CONTROL.resp(), frame.srcAddress, payload, sizeof(payload));
+    }
+    else
+    {
+        uint8_t oprator = frame.payload[0];
+        uint8_t value = frame.payload[1];
+        uint8_t channel = frame.payload[2];
+
+        for (uint8_t i = 0; i < FloorHeatPanel::FHEAT_COUNT; ++i)
+        {
+            const FloorHeatPanel::State &state = fheat_.get(i);
+
+            if (!state.valid)
+                continue;
+
+            if (state.channel != channel)
+                continue;
+
+            const uint16_t address = (static_cast<uint16_t>(state.deviceSn) << 8) | state.deviceId;
+
+            if (frame.srcAddress != address)
+                continue;
+
+            switch (oprator)
+            {
+            case 0x14:
+                fheat_.setPower(i, value);
+                break;
+
+            case 0x15:
+                fheat_.setMode(i, value - 1);
+                break;
+
+            case 0x17:
+                fheat_.setSetTempNormal(i, value);
+                break;
+
+            case 0x18:
+                fheat_.setSetTempDay(i, value);
+                break;
+
+            case 0x19:
+                fheat_.setSetTempNight(i, value);
+                break;
+
+            case 0x1A:
+                fheat_.setSetTempAway(i, value);
+                break;
+
+            default:
+                break;
+            }
+        }
+
+        // uint8_t payload[3] = {frame.payload[0], frame.payload[1], frame.payload[2]};
+        // sendResponse(BusproOp::Touch::PANEL_CONTROL.resp(), frame.srcAddress, payload, sizeof(payload));
+    }
+}
+
+void TouchModule::handleReadTemp(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 1)
+        return;
+
+    uint8_t payload[2] = {frame.payload[0], static_cast<uint8_t>(outsideNtc.temperature())};
+
+    sendResponse(BusproOp::Touch::READ_TEMP.resp(), frame.srcAddress, payload, sizeof(payload));
+}
+
+void TouchModule::handleUpdateHvac(const BusproFrame &frame)
+{
+    if (frame.payloadLen != 14)
+        return;
+
+    for (uint8_t i = 0; i < HVACPanel::HVAC_COUNT; ++i)
+    {
+        const HVACPanel::State &state = hvac_.get(i);
+
+        if (!state.valid)
+            continue;
+
+        const uint16_t address = (static_cast<uint16_t>(state.deviceSn) << 8) | state.deviceId;
+
+        if (frame.srcAddress != address)
+            continue;
+
+        hvac_.setSetTempCool(i, frame.payload[3]);
+        hvac_.setSetTempHeat(i, frame.payload[4]);
+        hvac_.setSetTempAuto(i, frame.payload[5]);
+
+        hvac_.setAutoFan(i, frame.payload[7]);
+        hvac_.setPower(i, frame.payload[8] != 0);
+        hvac_.setMode(i, frame.payload[9]);
+        hvac_.setFan(i, frame.payload[10]);
+
+        return;
+    }
 }
 
 //////////////////////////////// DLP Functions /////////////////////////////////
@@ -2390,8 +2795,6 @@ void TouchModule::handleReadMacaddress(const BusproFrame &frame)
 
     uint8_t payload[12] = {0x00};
 
-    // mcu::copyArray(mcu::getMcuUID(), payload, 8);
-
     sendResponse(BusproOp::DEVICE_MAC_ADDRESS.readResp(), frame.srcAddress, payload, sizeof(payload));
 }
 void TouchModule::handleModifyMacaddress(const BusproFrame &frame)
@@ -2441,6 +2844,10 @@ void TouchModule::handleModifyDeviceRemark(const BusproFrame &frame)
     {
         configMode = atoi(reinterpret_cast<const char *>(frame.payload + 5));
     }
+    else if (strncmp(reinterpret_cast<const char *>(frame.payload), "INITIALIZATION", 14) == 0)
+    {
+        init();
+    }
     else
     {
         flash_.update(flash_.findAdrress(memoryaddress_, MemoryAdress::DEVICE_REMARK), frame.payload, frame.payloadLen);
@@ -2453,21 +2860,16 @@ void TouchModule::handleModifyDeviceRemark(const BusproFrame &frame)
 /////////////////////////////// UNIVERSAL REQUEST ///////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////
 
-void TouchModule::handleSingleChannel(const BusproFrame &frame)
+void TouchModule::updateChannelLED(uint16_t srcAddress, uint8_t channel, bool state)
 {
-    if (frame.payloadLen < 3)
-        return;
-
-    uint8_t channel = frame.payload[0];
-    bool state = frame.payload[2];
+    using SwitchType = SwitchPanel::SwitchType;
 
     uint8_t function[7];
 
-    using SwitchType = SwitchPanel::SwitchType;
-
     for (uint8_t i = 0; i < 16; i++)
     {
-        SwitchType keyType = static_cast<SwitchType>(switchPanel_.getKeyType(i));
+        SwitchType keyType =
+            static_cast<SwitchType>(switchPanel_.getKeyType(i));
 
         bool isMerge = false;
 
@@ -2496,30 +2898,20 @@ void TouchModule::handleSingleChannel(const BusproFrame &frame)
             continue;
         }
 
-        uint8_t functionIndices[2];
-        uint8_t count;
-
-        if (isMerge)
-        {
-            functionIndices[0] = 1;
-            count = 1;
-        }
-        else
-        {
-            functionIndices[0] = 1;
-            functionIndices[1] = 50;
-            count = 2;
-        }
+        uint8_t functionIndices[2] = {1, 50};
+        uint8_t count = isMerge ? 1 : 2;
 
         for (uint8_t j = 0; j < count; j++)
         {
             switchPanel_.getKeyFunction(function, i + 1, functionIndices[j]);
 
-            uint16_t address = (static_cast<uint16_t>(function[1]) << 8) | function[2];
+            uint16_t address =
+                (static_cast<uint16_t>(function[1]) << 8) |
+                function[2];
 
             uint16_t opCode = switchPanel_.getOperationCode(function[0]);
 
-            if (address == frame.srcAddress &&
+            if (address == srcAddress &&
                 opCode == BusproOp::CONTROL_SINGLE.req() &&
                 function[3] == channel)
             {
@@ -2539,13 +2931,73 @@ void TouchModule::handleSingleChannel(const BusproFrame &frame)
     }
 }
 
+void TouchModule::handleSingleChannel(const BusproFrame &frame)
+{
+    if (frame.payloadLen < 3)
+        return;
+
+    const uint8_t *payload = frame.payload;
+
+    using SwitchType = SwitchPanel::SwitchType;
+
+    // OLD FORMAT:
+    // [channel] [result] [state]
+    if (frame.payloadLen < 6)
+    {
+        uint8_t channel = payload[0];
+        bool state = payload[2] != 0;
+
+        updateChannelLED(frame.srcAddress, channel, state);
+        return;
+    }
+
+    // NEW FORMAT:
+    // [channel] [result] [state] [maxChannel] [bitmap_L] [bitmap_H] [...]
+
+    if (frame.payloadLen >= 6)
+    {
+        uint8_t maxChannel = payload[3];
+
+        if (maxChannel > 12)
+            maxChannel = 12;
+
+        uint16_t channelStates = static_cast<uint16_t>(payload[4]) | (static_cast<uint16_t>(payload[5]) << 8);
+
+        for (uint8_t channel = 1; channel <= maxChannel; channel++)
+        {
+            bool state = (channelStates & (1U << (channel - 1))) != 0;
+
+            updateChannelLED(frame.srcAddress, channel, state);
+        }
+    }
+}
+
+void TouchModule::handleStateChannel(const BusproFrame &frame)
+{
+    if (frame.payloadLen < 7)
+        return;
+
+    const uint8_t activeZones = frame.payload[0];
+
+    const uint8_t *payload = frame.payload;
+
+    uint16_t channelStates = static_cast<uint16_t>(payload[activeZones + 2]) | (static_cast<uint16_t>(payload[activeZones + 3]) << 8);
+
+    for (uint8_t channel = 1; channel <= 12; channel++)
+    {
+        bool state = (channelStates & (1U << (channel - 1))) != 0;
+
+        updateChannelLED(frame.srcAddress, channel, state);
+    }
+}
+
 void TouchModule::handleSceneControl(const BusproFrame &frame)
 {
     if (frame.payloadLen < 2)
         return;
 
-    uint8_t scene = frame.payload[0];
-    bool state = frame.payload[1];
+    uint8_t zone = frame.payload[0];
+    uint8_t scene = frame.payload[1];
 
     uint8_t function[7];
 
@@ -2607,11 +3059,11 @@ void TouchModule::handleSceneControl(const BusproFrame &frame)
 
             if (address == frame.srcAddress &&
                 opCode == BusproOp::SCENE_CONTROL.req() &&
-                function[3] == scene)
+                function[3] == zone)
             {
                 uint8_t led = i * 2;
 
-                bool ledStateValue = (state == function[4]);
+                bool ledStateValue = (scene == function[4]);
 
                 if (isMerge)
                 {

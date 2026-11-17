@@ -1,46 +1,90 @@
 #include "HVACPanel.h"
+#include <string.h>
 
 namespace
 {
-    // Select the first configured HVAC, falling back to index 0 when none are valid.
-    void selectFirstValidHvac(const HVACPanel::State *states, uint8_t count, uint8_t &selected)
+    // Setpoint for the state's active mode (nullptr in dehumidify / invalid mode).
+    template <typename S>
+    auto setpointOf(S &s) -> decltype(&s.setTempCool)
     {
-        selected = 0;
-        for (uint8_t i = 0; i < count; ++i)
+        switch (s.mode)
         {
-            if (states[i].valid)
-            {
-                selected = i;
-                return;
-            }
+        case HVACPanel::MODE_COOL:
+            return &s.setTempCool;
+        case HVACPanel::MODE_HEAT:
+            return &s.setTempHeat;
+        case HVACPanel::MODE_AUTO:
+            return &s.setTempAuto;
+        default:
+            return nullptr;
         }
     }
 
-    // Return the configured setpoint range for the active operating mode.
-    bool getTemperatureRange(const HVACPanel::State &state, uint8_t &minimum, uint8_t &maximum)
+    // Move `current` to the next/previous index (circular) accepted by isValid.
+    template <typename Pred>
+    bool stepToValid(uint8_t count, uint8_t &current, bool forward, Pred isValid)
     {
-        const uint8_t *range = nullptr;
-        switch (state.mode)
+        uint8_t idx = (current < count) ? current : count - 1;
+
+        for (uint8_t n = 1; n < count; ++n)
         {
-        case 0:
-            range = state.rangeCool;
-            break;
-        case 1:
-            range = state.rangeHeat;
-            break;
-        case 2:
-            range = state.rangeAuto;
-            break;
-        case 3:
-            range = state.rangeDehum;
-            break;
-        default:
-            return false;
+            if (forward)
+                idx = (idx + 1 >= count) ? 0 : idx + 1;
+            else
+                idx = (idx == 0) ? count - 1 : idx - 1;
+
+            if (isValid(idx))
+            {
+                current = idx;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Set flags[item] and keep `selected` pointing at a valid entry.
+    // Returns true if anything changed (i.e. worth persisting).
+    template <size_t N>
+    bool setFlagAndRepair(bool (&flags)[N], uint8_t &selected, uint8_t item, bool valid)
+    {
+        const bool flagChanged = (flags[item] != valid);
+        const uint8_t before = selected;
+
+        flags[item] = valid;
+
+        if (!valid && selected == item)
+        {
+            selected = 0;
+            for (uint8_t i = 0; i < N; ++i)
+            {
+                if (flags[i])
+                {
+                    selected = i;
+                    break;
+                }
+            }
+        }
+        else if (valid && (selected >= N || !flags[selected]))
+        {
+            selected = item;
         }
 
-        minimum = range[0];
-        maximum = range[1];
-        return minimum <= maximum;
+        return flagChanged || selected != before;
+    }
+
+    // Keep `selected` if valid, otherwise first valid entry, otherwise 0.
+    template <size_t N>
+    uint8_t repairSelection(const bool (&flags)[N], uint8_t selected)
+    {
+        if (selected < N && flags[selected])
+            return selected;
+
+        for (uint8_t i = 0; i < N; ++i)
+        {
+            if (flags[i])
+                return i;
+        }
+        return 0;
     }
 }
 
@@ -48,10 +92,6 @@ HVACPanel::HVACPanel(MemoryCore &flash)
     : currentHvac_(0),
       flash_(flash)
 {
-    for (uint8_t i = 0; i < HVAC_COUNT; ++i)
-    {
-        hvac_[i] = State{};
-    }
 }
 
 // =================================================
@@ -62,160 +102,63 @@ void HVACPanel::load()
 {
     for (uint8_t i = 0; i < HVAC_COUNT; ++i)
     {
-        hvac_[i] = State{};
-        fetchHvac(i);
+        fetchUnit(i);
+        snapshotValid_[i] = false;
     }
 
-    fetchImage();
-
-    selectFirstValidHvac(hvac_, HVAC_COUNT, currentHvac_);
+    currentHvac_ = 0;
+    refreshSelection(0);
 }
 
-bool HVACPanel::update()
-{
-    if (currentHvac_ >= HVAC_COUNT)
-        return false;
-
-    const State &state = hvac_[currentHvac_];
-
-    if (!state.valid)
-        return false;
-
-    ControlSnapshot current{
-        state.power,
-        state.setTemp,
-        state.mode,
-        state.fan,
-        state.autofan};
-
-    ControlSnapshot &last = lastSent_[currentHvac_];
-
-    const bool changed =
-        !snapshotValid_[currentHvac_] ||
-        current.power != last.power ||
-        current.setTemp != last.setTemp ||
-        current.mode != last.mode ||
-        current.fan != last.fan ||
-        current.autofan != last.autofan;
-
-    if (!changed)
-        return false;
-
-    last = current;
-    snapshotValid_[currentHvac_] = true;
-
-    return true;
-}
-
-void HVACPanel::fetchHvacValid(uint8_t index)
-{
-    if (index >= HVAC_COUNT)
-        return;
-
-    uint8_t valid = 0;
-    const uint32_t address = flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::HVAC_ADDRESSES[index]);
-    flash_.read(address, &valid, sizeof(valid));
-
-    hvac_[index].valid = valid;
-}
-
-void HVACPanel::fetchHvacValid()
-{
-    for (uint8_t i = 0; i < HVAC_COUNT; ++i)
-    {
-        fetchHvacValid(i);
-    }
-}
-
-void HVACPanel::fetchHvac(uint8_t index)
+void HVACPanel::fetchUnit(uint8_t index)
 {
     if (index >= HVAC_COUNT)
         return;
 
     FlashHvac data{};
-
-    const uint32_t address = flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::HVAC_ADDRESSES[index]);
-
+    const uint32_t address = flash_.findAdrress(
+        MemoryAdress::Touch::SECTOR_INFO,
+        MemoryAdress::Touch::HVAC_ADDRESSES[index]);
     flash_.read(address, reinterpret_cast<uint8_t *>(&data), sizeof(data));
 
     State &state = hvac_[index];
+    state = State{};
 
-    // Erased or invalid record.
-    // Valid member values are strictly 0 or 1.
+    // Erased record: keep defaults.
     if (data.valid > 1)
-    {
-        state = State{};
-        state.valid = 0;
         return;
-    }
 
-    // Restore these even when the HVAC is disabled.
-    state.valid = data.valid;
+    state.valid = data.valid != 0;
     state.deviceSn = data.deviceSn;
     state.deviceId = data.deviceId;
-
     state.power = data.power != 0;
-    state.setTemp = data.setTemp;
+    state.irEnabled = data.irEnabled != 0;
 
     state.mode = data.mode;
     state.fan = data.fan;
     state.autofan = data.autofan;
 
     for (uint8_t i = 0; i < MODE_COUNT; ++i)
-        state.validMode[i] =
-            (data.validModeMask & (1u << i)) != 0;
+        state.validMode[i] = (data.validModeMask & (1u << i)) != 0;
 
     for (uint8_t i = 0; i < FAN_COUNT; ++i)
-        state.validFan[i] =
-            (data.validFanMask & (1u << i)) != 0;
+        state.validFan[i] = (data.validFanMask & (1u << i)) != 0;
 
-    for (uint8_t i = 0; i < 2; ++i)
-    {
-        state.rangeCool[i] = data.rangeCool[i];
-        state.rangeHeat[i] = data.rangeHeat[i];
-        state.rangeAuto[i] = data.rangeAuto[i];
-        state.rangeDehum[i] = data.rangeDehum[i];
-    }
+    memcpy(state.rangeCool, data.rangeCool, sizeof(state.rangeCool));
+    memcpy(state.rangeHeat, data.rangeHeat, sizeof(state.rangeHeat));
+    memcpy(state.rangeAuto, data.rangeAuto, sizeof(state.rangeAuto));
+    memcpy(state.rangeDehum, data.rangeDehum, sizeof(state.rangeDehum));
 
-    if (data.tempSource <= static_cast<uint8_t>(TempSource::Average))
-    {
-        state.tempSource = static_cast<TempSource>(data.tempSource);
-    }
-    else
-    {
-        state.tempSource = TempSource::Internal;
-    }
+    state.tempSource = (data.tempSource <= static_cast<uint8_t>(TempSource::Average))
+                           ? static_cast<TempSource>(data.tempSource)
+                           : TempSource::Internal;
 
-    for (uint8_t i = 0; i < TEMP_SENSOR_COUNT; ++i)
-    {
-        state.tempSensors[i].state = data.tempSensors[i].state;
-        state.tempSensors[i].deviceSn = data.tempSensors[i].deviceSn;
-        state.tempSensors[i].deviceId = data.tempSensors[i].deviceId;
-        state.tempSensors[i].channel = data.tempSensors[i].channel;
-    }
+    memcpy(state.tempSensors, data.tempSensors, sizeof(state.tempSensors));
 
-    // Old records may contain zeroed ranges because the previous
-    // saveHvac() did not save them.
-    auto fixRange = [](uint8_t range[2])
-    {
-        if (range[0] == 0 || range[1] == 0 ||
-            range[0] > range[1])
-        {
-            range[0] = 15;
-            range[1] = 30;
-        }
-    };
-
-    fixRange(state.rangeCool);
-    fixRange(state.rangeHeat);
-    fixRange(state.rangeAuto);
-    fixRange(state.rangeDehum);
-
-    if (state.valid)
-        normalizeState(state);
+    normalizeState(state);
 }
 
-void HVACPanel::saveHvac(uint8_t index)
+void HVACPanel::saveUnit(uint8_t index)
 {
     if (index >= HVAC_COUNT)
         return;
@@ -227,9 +170,8 @@ void HVACPanel::saveHvac(uint8_t index)
     data.valid = state.valid ? 1 : 0;
     data.deviceSn = state.deviceSn;
     data.deviceId = state.deviceId;
-
     data.power = state.power ? 1 : 0;
-    data.setTemp = state.setTemp;
+    data.irEnabled = state.irEnabled ? 1 : 0;
 
     data.mode = state.mode;
     data.fan = state.fan;
@@ -243,109 +185,174 @@ void HVACPanel::saveHvac(uint8_t index)
         if (state.validFan[i])
             data.validFanMask |= (1u << i);
 
-    for (uint8_t i = 0; i < 2; ++i)
-    {
-        data.rangeCool[i] = state.rangeCool[i];
-        data.rangeHeat[i] = state.rangeHeat[i];
-        data.rangeAuto[i] = state.rangeAuto[i];
-        data.rangeDehum[i] = state.rangeDehum[i];
-    }
+    memcpy(data.rangeCool, state.rangeCool, sizeof(data.rangeCool));
+    memcpy(data.rangeHeat, state.rangeHeat, sizeof(data.rangeHeat));
+    memcpy(data.rangeAuto, state.rangeAuto, sizeof(data.rangeAuto));
+    memcpy(data.rangeDehum, state.rangeDehum, sizeof(data.rangeDehum));
 
     data.tempSource = static_cast<uint8_t>(state.tempSource);
+    memcpy(data.tempSensors, state.tempSensors, sizeof(data.tempSensors));
 
-    for (uint8_t i = 0; i < TEMP_SENSOR_COUNT; ++i)
-    {
-        data.tempSensors[i].state = state.tempSensors[i].state;
-        data.tempSensors[i].deviceSn = state.tempSensors[i].deviceSn;
-        data.tempSensors[i].deviceId = state.tempSensors[i].deviceId;
-        data.tempSensors[i].channel = state.tempSensors[i].channel;
-    }
-
-    const uint32_t address = flash_.findAdrress(MemoryAdress::Touch::SECTOR_INFO, MemoryAdress::Touch::HVAC_ADDRESSES[index]);
+    const uint32_t address = flash_.findAdrress(
+        MemoryAdress::Touch::SECTOR_INFO,
+        MemoryAdress::Touch::HVAC_ADDRESSES[index]);
 
     flash_.update(address, reinterpret_cast<uint8_t *>(&data), sizeof(data));
 }
 
 void HVACPanel::saveCurrent()
 {
-    saveHvac(currentHvac_);
+    saveUnit(currentHvac_);
 }
 
 void HVACPanel::save(uint8_t index)
 {
-    if (index >= HVAC_COUNT)
-        return;
-
-    saveHvac(index);
+    saveUnit(index);
 }
 
-void HVACPanel::fetchImage(uint8_t index)
+void HVACPanel::normalizeState(State &state)
 {
-    if (index >= HVAC_COUNT)
+    state.mode = repairSelection(state.validMode, state.mode);
+    state.fan = repairSelection(state.validFan, state.fan);
+
+    // Invalid range -> defaults.
+    auto fixRange = [](uint8_t (&range)[2])
+    {
+        if (range[0] == 0 || range[1] == 0 || range[0] > range[1])
+        {
+            range[0] = 15;
+            range[1] = 30;
+        }
+    };
+
+    fixRange(state.rangeCool);
+    fixRange(state.rangeHeat);
+    fixRange(state.rangeAuto);
+    fixRange(state.rangeDehum);
+
+    // Setpoints must sit inside their range (also catches NaN).
+    auto clampTo = [](float &t, const uint8_t (&range)[2])
+    {
+        if (!(t >= range[0]))
+            t = range[0];
+        else if (t > range[1])
+            t = range[1];
+    };
+
+    clampTo(state.setTempCool, state.rangeCool);
+    clampTo(state.setTempHeat, state.rangeHeat);
+    clampTo(state.setTempAuto, state.rangeAuto);
+}
+
+// =================================================
+// Change detection
+// =================================================
+
+bool HVACPanel::update()
+{
+    const State &state = hvac_[currentHvac_];
+
+    if (!state.valid)
+        return false;
+
+    const float *setpoint = setpointOf(state);
+
+    const ControlSnapshot current{
+        state.power,
+        setpoint ? *setpoint : 0.0f,
+        state.mode,
+        state.fan,
+        state.autofan};
+
+    if (snapshotValid_[currentHvac_] && current == lastSent_[currentHvac_])
+        return false;
+
+    lastSent_[currentHvac_] = current;
+    snapshotValid_[currentHvac_] = true;
+    return true;
+}
+
+// =================================================
+// Icon (current unit only)
+// =================================================
+
+void HVACPanel::loadCurrentImage()
+{
+    if (!hvac_[currentHvac_].valid)
         return;
 
     const uint32_t address = flash_.findAdrress(
         MemoryAdress::Touch::SECTOR_ICONS,
-        MemoryAdress::Touch::HVAC_IMAGE[index]);
-    flash_.read(address, images_[index], HVAC_IMAGE_SIZE);
+        MemoryAdress::Touch::HVAC_IMAGE[currentHvac_]);
+    flash_.read(address, image_, HVAC_IMAGE_SIZE);
 }
 
 void HVACPanel::fetchImage()
 {
-    for (uint8_t i = 0; i < HVAC_COUNT; ++i)
-    {
-        fetchImage(i);
-    }
+    loadCurrentImage();
+}
+
+void HVACPanel::fetchImage(uint8_t index)
+{
+    if (index == currentHvac_)
+        loadCurrentImage();
+}
+
+const uint8_t *HVACPanel::currentImage() const
+{
+    return hvac_[currentHvac_].valid ? image_ : nullptr;
 }
 
 // =================================================
 // HVAC selection
 // =================================================
 
-const uint8_t *HVACPanel::currentImage() const
+// Ensure currentHvac_ points at a valid unit (if any exists) and that the
+// icon buffer matches it.
+void HVACPanel::refreshSelection(uint8_t changedIndex)
 {
-    if (currentHvac_ >= HVAC_COUNT || !hvac_[currentHvac_].valid)
-        return nullptr;
+    const uint8_t before = currentHvac_;
 
-    return images_[currentHvac_];
+    if (!hvac_[currentHvac_].valid)
+    {
+        currentHvac_ = 0;
+        for (uint8_t i = 0; i < HVAC_COUNT; ++i)
+        {
+            if (hvac_[i].valid)
+            {
+                currentHvac_ = i;
+                break;
+            }
+        }
+    }
+
+    if (currentHvac_ != before || changedIndex == currentHvac_)
+        loadCurrentImage();
 }
 
-void HVACPanel::setCurrentHvac(uint8_t index)
+void HVACPanel::setCurrentUnit(uint8_t index)
 {
-    if (index >= HVAC_COUNT)
-        return;
-
-    if (!hvac_[index].valid)
+    if (index >= HVAC_COUNT || !hvac_[index].valid || index == currentHvac_)
         return;
 
     currentHvac_ = index;
+    loadCurrentImage();
 }
 
-uint8_t HVACPanel::currentHvac() const
+uint8_t HVACPanel::currentUnit() const
 {
     return currentHvac_;
 }
 
-bool HVACPanel::changeHvac(bool forward)
+bool HVACPanel::changeUnit(bool forward)
 {
-    const uint8_t oldHvac = currentHvac_;
-    uint8_t hvac = currentHvac_;
+    const bool moved = stepToValid(HVAC_COUNT, currentHvac_, forward,
+                                   [this](uint8_t i)
+                                   { return hvac_[i].valid; });
+    if (moved)
+        loadCurrentImage();
 
-    for (uint8_t i = 1; i < HVAC_COUNT; ++i)
-    {
-        if (forward)
-            hvac = (hvac >= HVAC_COUNT - 1) ? 0 : hvac + 1;
-        else
-            hvac = (hvac == 0) ? HVAC_COUNT - 1 : hvac - 1;
-
-        if (hvac_[hvac].valid)
-        {
-            currentHvac_ = hvac;
-            return currentHvac_ != oldHvac;
-        }
-    }
-
-    return false;
+    return moved;
 }
 
 HVACPanel::State &HVACPanel::currentState()
@@ -363,8 +370,8 @@ HVACPanel::State &HVACPanel::get(uint8_t index)
     if (index < HVAC_COUNT)
         return hvac_[index];
 
-    static State invalidState{};
-    invalidState.valid = false;
+    static State invalidState;
+    invalidState = State{}; // callers may have scribbled on it
     return invalidState;
 }
 
@@ -373,13 +380,7 @@ const HVACPanel::State &HVACPanel::get(uint8_t index) const
     if (index < HVAC_COUNT)
         return hvac_[index];
 
-    static const State invalidState = []
-    {
-        State state{};
-        state.valid = false;
-        return state;
-    }();
-
+    static const State invalidState{};
     return invalidState;
 }
 
@@ -387,37 +388,54 @@ const HVACPanel::State &HVACPanel::get(uint8_t index) const
 // HVAC validity
 // =================================================
 
+void HVACPanel::setHvacMember(uint8_t index, bool enabled, uint8_t deviceSn, uint8_t deviceId)
+{
+    if (index >= HVAC_COUNT)
+        return;
+
+    State &state = hvac_[index];
+
+    // Avoid pointless flash writes.
+    if (state.valid == enabled && state.deviceSn == deviceSn && state.deviceId == deviceId)
+        return;
+
+    state.valid = enabled;
+    state.deviceSn = deviceSn;
+    state.deviceId = deviceId;
+    snapshotValid_[index] = false; // new/removed target -> resend
+
+    saveUnit(index);
+    refreshSelection(index);
+}
+
 void HVACPanel::setHvacValid(uint8_t index, bool valid)
 {
     if (index >= HVAC_COUNT)
         return;
 
-    hvac_[index].valid = valid;
-    saveHvac(index);
-
-    if (!valid && currentHvac_ == index)
-    {
-        selectFirstValidHvac(hvac_, HVAC_COUNT, currentHvac_);
-    }
+    const State &state = hvac_[index];
+    setHvacMember(index, valid, state.deviceSn, state.deviceId);
 }
 
-bool HVACPanel::hasValidHvac() const
+bool HVACPanel::hasValidUnit() const
 {
     for (uint8_t i = 0; i < HVAC_COUNT; ++i)
     {
         if (hvac_[i].valid)
             return true;
     }
-
     return false;
 }
 
 bool HVACPanel::isHvacValid(uint8_t index) const
 {
-    if (index >= HVAC_COUNT)
-        return false;
+    return index < HVAC_COUNT && hvac_[index].valid;
+}
 
-    return hvac_[index].valid;
+uint16_t HVACPanel::address() const
+{
+    const State &state = currentState();
+    return (static_cast<uint16_t>(state.deviceSn) << 8) | state.deviceId;
 }
 
 // =================================================
@@ -436,7 +454,22 @@ bool HVACPanel::power() const
 
 void HVACPanel::togglePower()
 {
-    currentState().power = !currentState().power;
+    State &state = currentState();
+    state.power = !state.power;
+}
+
+bool HVACPanel::setPower(uint8_t index, bool power)
+{
+    if (index >= HVAC_COUNT)
+        return false;
+
+    State &state = hvac_[index];
+
+    if (!state.valid || state.power == power)
+        return false;
+
+    state.power = power;
+    return true;
 }
 
 // =================================================
@@ -453,75 +486,77 @@ float HVACPanel::currentTemp() const
     return currentState().currentTemp;
 }
 
-void HVACPanel::normalizeState(State &state)
+uint8_t HVACPanel::getSetTempCool() const
 {
-    // Restore a usable mode if the saved mode is invalid.
-    if (state.mode >= MODE_COUNT || !state.validMode[state.mode])
-    {
-        bool found = false;
-
-        for (uint8_t i = 0; i < MODE_COUNT; ++i)
-        {
-            if (state.validMode[i])
-            {
-                state.mode = i;
-                found = true;
-                break;
-            }
-        }
-
-        if (!found)
-            state.mode = 0;
-    }
-
-    // Restore a usable fan setting.
-    if (state.fan >= FAN_COUNT || !state.validFan[state.fan])
-    {
-        bool found = false;
-
-        for (uint8_t i = 0; i < FAN_COUNT; ++i)
-        {
-            if (state.validFan[i])
-            {
-                state.fan = i;
-                found = true;
-                break;
-            }
-        }
-
-        if (!found)
-            state.fan = 0;
-    }
-
-    // Prevent invalid or non-finite stored temperatures.
-    if (!(state.setTemp >= 0.0f && state.setTemp <= 100.0f))
-        state.setTemp = 24.0f;
+    return static_cast<uint8_t>(currentState().setTempCool);
 }
 
-void HVACPanel::setSetTemp(float temp)
+uint8_t HVACPanel::getSetTempHeat() const
+{
+    return static_cast<uint8_t>(currentState().setTempHeat);
+}
+
+uint8_t HVACPanel::getSetTempAuto() const
+{
+    return static_cast<uint8_t>(currentState().setTempAuto);
+}
+
+// Clamp to the mode's range, truncate to whole degrees, store.
+// Returns true if the stored value changed.
+bool HVACPanel::applySetpoint(State &state, uint8_t mode, float temp)
+{
+    float *target;
+    const uint8_t *range;
+
+    switch (mode)
+    {
+    case MODE_COOL:
+        target = &state.setTempCool;
+        range = state.rangeCool;
+        break;
+    case MODE_HEAT:
+        target = &state.setTempHeat;
+        range = state.rangeHeat;
+        break;
+    case MODE_AUTO:
+        target = &state.setTempAuto;
+        range = state.rangeAuto;
+        break;
+    default:
+        return false;
+    }
+
+    if (range[0] > range[1])
+        return false;
+
+    if (temp < range[0])
+        temp = range[0];
+    else if (temp > range[1])
+        temp = range[1];
+
+    const float value = static_cast<float>(static_cast<uint8_t>(temp));
+
+    if (*target == value)
+        return false;
+
+    *target = value;
+    return true;
+}
+
+bool HVACPanel::setSetTemp(float temp)
 {
     if (!(temp >= 0.0f && temp <= 100.0f))
-        return;
+        return false;
 
     State &state = currentState();
-
-    uint8_t minTemp;
-    uint8_t maxTemp;
-    if (!getTemperatureRange(state, minTemp, maxTemp))
-        return;
-
-    if (temp < minTemp)
-        temp = static_cast<float>(minTemp);
-
-    if (temp > maxTemp)
-        temp = static_cast<float>(maxTemp);
-
-    state.setTemp = temp;
+    return applySetpoint(state, state.mode, temp);
 }
 
 float HVACPanel::setTemp() const
 {
-    return currentState().setTemp;
+    const State &state = currentState();
+    const float *setpoint = setpointOf(state);
+    return setpoint ? *setpoint : state.setTempCool;
 }
 
 bool HVACPanel::increaseTemp(float amount)
@@ -529,11 +564,8 @@ bool HVACPanel::increaseTemp(float amount)
     if (!(amount > 0.0f && amount <= 100.0f))
         return false;
 
-    const float previous = currentState().setTemp;
-
-    setSetTemp(previous + amount);
-
-    return currentState().setTemp != previous;
+    const float target = setTemp() + amount;
+    return setSetTemp(target > 100.0f ? 100.0f : target);
 }
 
 bool HVACPanel::decreaseTemp(float amount)
@@ -541,11 +573,51 @@ bool HVACPanel::decreaseTemp(float amount)
     if (!(amount > 0.0f && amount <= 100.0f))
         return false;
 
-    const float previous = currentState().setTemp;
+    const float target = setTemp() - amount;
+    return setSetTemp(target < 0.0f ? 0.0f : target);
+}
 
-    setSetTemp(previous - amount);
+bool HVACPanel::setSetTempCool(uint8_t index, uint8_t temp)
+{
+    return index < HVAC_COUNT && hvac_[index].valid &&
+           applySetpoint(hvac_[index], MODE_COOL, temp);
+}
 
-    return currentState().setTemp != previous;
+bool HVACPanel::setSetTempHeat(uint8_t index, uint8_t temp)
+{
+    return index < HVAC_COUNT && hvac_[index].valid &&
+           applySetpoint(hvac_[index], MODE_HEAT, temp);
+}
+
+bool HVACPanel::setSetTempAuto(uint8_t index, uint8_t temp)
+{
+    return index < HVAC_COUNT && hvac_[index].valid &&
+           applySetpoint(hvac_[index], MODE_AUTO, temp);
+}
+
+void HVACPanel::setIrEnabled(bool enabled)
+{
+    setIrEnabled(currentHvac_, enabled);
+}
+
+bool HVACPanel::irEnabled() const
+{
+    return currentState().irEnabled;
+}
+
+bool HVACPanel::setIrEnabled(uint8_t index, bool enabled)
+{
+    if (index >= HVAC_COUNT)
+        return false;
+
+    State &state = hvac_[index];
+
+    if (!state.valid || state.irEnabled == enabled)
+        return false;
+
+    state.irEnabled = enabled;
+    saveUnit(index);
+    return true;
 }
 
 // =================================================
@@ -554,13 +626,24 @@ bool HVACPanel::decreaseTemp(float amount)
 
 void HVACPanel::setMode(uint8_t mode)
 {
-    if (mode >= MODE_COUNT)
-        return;
+    State &state = currentState();
 
-    if (!currentState().validMode[mode])
-        return;
+    if (mode < MODE_COUNT && state.validMode[mode])
+        state.mode = mode;
+}
 
-    currentState().mode = mode;
+bool HVACPanel::setMode(uint8_t index, uint8_t mode)
+{
+    if (index >= HVAC_COUNT || mode >= MODE_COUNT)
+        return false;
+
+    State &state = hvac_[index];
+
+    if (!state.valid || !state.validMode[mode] || state.mode == mode)
+        return false;
+
+    state.mode = mode;
+    return true;
 }
 
 uint8_t HVACPanel::mode() const
@@ -571,39 +654,17 @@ uint8_t HVACPanel::mode() const
 bool HVACPanel::nextMode()
 {
     State &state = currentState();
-
-    for (uint8_t offset = 1; offset <= MODE_COUNT; ++offset)
-    {
-        const uint8_t index = (state.mode + offset) % MODE_COUNT;
-
-        if (state.validMode[index])
-        {
-            if (state.mode == index)
-                return false;
-
-            state.mode = index;
-            return true;
-        }
-    }
-
-    return false;
+    return stepToValid(MODE_COUNT, state.mode, true,
+                       [&state](uint8_t i)
+                       { return state.validMode[i]; });
 }
 
-void HVACPanel::previousMode()
+bool HVACPanel::previousMode()
 {
     State &state = currentState();
-
-    for (uint8_t offset = 1; offset <= MODE_COUNT; ++offset)
-    {
-        uint8_t index =
-            (state.mode + MODE_COUNT - offset) % MODE_COUNT;
-
-        if (state.validMode[index])
-        {
-            state.mode = index;
-            return;
-        }
-    }
+    return stepToValid(MODE_COUNT, state.mode, false,
+                       [&state](uint8_t i)
+                       { return state.validMode[i]; });
 }
 
 void HVACPanel::setModeValid(uint8_t mode, bool valid)
@@ -611,83 +672,15 @@ void HVACPanel::setModeValid(uint8_t mode, bool valid)
     setModeValid(currentHvac_, mode, valid);
 }
 
-void HVACPanel::setModeValid(
-    uint8_t hvacIndex,
-    uint8_t mode,
-    bool valid)
+void HVACPanel::setModeValid(uint8_t hvacIndex, uint8_t mode, bool valid)
 {
     if (hvacIndex >= HVAC_COUNT || mode >= MODE_COUNT)
         return;
 
     State &state = hvac_[hvacIndex];
 
-    state.validMode[mode] = valid;
-
-    if (!valid && state.mode == mode)
-    {
-        for (uint8_t i = 0; i < MODE_COUNT; ++i)
-        {
-            if (state.validMode[i])
-            {
-                state.mode = i;
-                saveHvac(hvacIndex);
-                return;
-            }
-        }
-
-        // No valid modes remain.
-        state.mode = 0;
-    }
-    else if (valid &&
-             (state.mode >= MODE_COUNT ||
-              !state.validMode[state.mode]))
-    {
-        state.mode = mode;
-    }
-
-    saveHvac(hvacIndex);
-}
-
-void HVACPanel::setFanValid(uint8_t fan, bool valid)
-{
-    setFanValid(currentHvac_, fan, valid);
-}
-
-void HVACPanel::setFanValid(
-    uint8_t hvacIndex,
-    uint8_t fan,
-    bool valid)
-{
-    if (hvacIndex >= HVAC_COUNT || fan >= FAN_COUNT)
-        return;
-
-    State &state = hvac_[hvacIndex];
-
-    state.validFan[fan] = valid;
-
-    if (!valid && state.fan == fan)
-    {
-        for (uint8_t i = 0; i < FAN_COUNT; ++i)
-        {
-            if (state.validFan[i])
-            {
-                state.fan = i;
-                saveHvac(hvacIndex);
-                return;
-            }
-        }
-
-        // No valid fan speeds remain.
-        state.fan = 0;
-    }
-    else if (valid &&
-             (state.fan >= FAN_COUNT ||
-              !state.validFan[state.fan]))
-    {
-        state.fan = fan;
-    }
-
-    saveHvac(hvacIndex);
+    if (setFlagAndRepair(state.validMode, state.mode, mode, valid))
+        saveUnit(hvacIndex);
 }
 
 // =================================================
@@ -696,13 +689,38 @@ void HVACPanel::setFanValid(
 
 void HVACPanel::setFan(uint8_t fan)
 {
-    if (fan >= FAN_COUNT)
-        return;
+    State &state = currentState();
 
-    if (!currentState().validFan[fan])
-        return;
+    if (fan < FAN_COUNT && state.validFan[fan])
+        state.fan = fan;
+}
 
-    currentState().fan = fan;
+bool HVACPanel::setAutoFan(uint8_t index, uint8_t fan)
+{
+    if (index >= HVAC_COUNT || fan >= FAN_COUNT)
+        return false;
+
+    State &state = hvac_[index];
+
+    if (!state.valid || !state.validFan[fan] || state.autofan == fan)
+        return false;
+
+    state.autofan = fan;
+    return true;
+}
+
+bool HVACPanel::setFan(uint8_t index, uint8_t fan)
+{
+    if (index >= HVAC_COUNT || fan >= FAN_COUNT)
+        return false;
+
+    State &state = hvac_[index];
+
+    if (!state.valid || !state.validFan[fan] || state.fan == fan)
+        return false;
+
+    state.fan = fan;
+    return true;
 }
 
 uint8_t HVACPanel::fan() const
@@ -713,55 +731,28 @@ uint8_t HVACPanel::fan() const
 bool HVACPanel::changeFan(bool forward)
 {
     State &state = currentState();
-
-    const uint8_t previousFan = state.fan;
-
-    for (uint8_t offset = 1; offset <= FAN_COUNT; ++offset)
-    {
-        uint8_t index;
-
-        if (forward)
-        {
-            index = (state.fan + offset) % FAN_COUNT;
-        }
-        else
-        {
-            index = (state.fan + FAN_COUNT - offset) % FAN_COUNT;
-        }
-
-        if (state.validFan[index])
-        {
-            state.fan = index;
-            return state.fan != previousFan;
-        }
-    }
-
-    return false;
+    return stepToValid(FAN_COUNT, state.fan, forward,
+                       [&state](uint8_t i)
+                       { return state.validFan[i]; });
 }
 
-void HVACPanel::setHvacMember(uint8_t index, bool enabled, uint8_t deviceSn, uint8_t deviceId)
+void HVACPanel::setFanValid(uint8_t fan, bool valid)
 {
-    if (index >= HVAC_COUNT)
+    setFanValid(currentHvac_, fan, valid);
+}
+
+void HVACPanel::setFanValid(uint8_t hvacIndex, uint8_t fan, bool valid)
+{
+    if (hvacIndex >= HVAC_COUNT || fan >= FAN_COUNT)
         return;
 
-    State &state = hvac_[index];
+    State &state = hvac_[hvacIndex];
 
-    state.valid = enabled;
-    state.deviceSn = deviceSn;
-    state.deviceId = deviceId;
-
-    saveHvac(index);
-
-    if (!enabled && currentHvac_ == index)
-    {
-        selectFirstValidHvac(hvac_, HVAC_COUNT, currentHvac_);
-    }
+    if (setFlagAndRepair(state.validFan, state.fan, fan, valid))
+        saveUnit(hvacIndex);
 }
 
 bool HVACPanel::isFanValid(uint8_t fan) const
 {
-    if (fan >= FAN_COUNT)
-        return false;
-
-    return currentState().validFan[fan];
+    return fan < FAN_COUNT && currentState().validFan[fan];
 }

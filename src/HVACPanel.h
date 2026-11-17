@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 #include "MemoryCore.h"
 
@@ -9,8 +10,16 @@ public:
     static constexpr uint8_t HVAC_COUNT = 8;
     static constexpr uint8_t MODE_COUNT = 4;
     static constexpr uint8_t FAN_COUNT = 4;
-
     static constexpr uint8_t TEMP_SENSOR_COUNT = 8;
+    static constexpr uint16_t HVAC_IMAGE_SIZE = 240; // 64x30 / 8
+
+    enum : uint8_t
+    {
+        MODE_COOL = 0,
+        MODE_HEAT = 1,
+        MODE_AUTO = 2,
+        MODE_DEHUM = 3
+    };
 
     enum class TempSource : uint8_t
     {
@@ -29,16 +38,19 @@ public:
 
     struct State
     {
-        uint8_t version;
-        uint8_t valid;
-        // uint16_t deviceAddress = 0;
+        bool valid = false;
         uint8_t deviceSn = 0;
         uint8_t deviceId = 0;
 
         bool power = false;
+        bool irEnabled = false;
 
         float currentTemp = 24.0f;
-        float setTemp = 24.0f;
+
+        // UI-only setpoints (not persisted).
+        float setTempCool = 24.0f;
+        float setTempHeat = 24.0f;
+        float setTempAuto = 24.0f;
 
         uint8_t mode = 0;
         uint8_t fan = 0;
@@ -53,18 +65,20 @@ public:
         uint8_t rangeDehum[2] = {15, 30};
 
         TempSource tempSource = TempSource::Internal;
-        TempSensor tempSensors[8]{};
+        TempSensor tempSensors[TEMP_SENSOR_COUNT]{};
     };
 
+    // On-flash record. Byte layout is identical to the previous version
+    // (the old, never-written `float setTemp` is now `reserved`), so existing
+    // stored records stay readable.
     struct FlashHvac
     {
-        // HVAC settings
-        uint8_t valid;
+        uint8_t valid; // 0/1, anything else = erased
         uint8_t deviceSn;
         uint8_t deviceId;
-
         uint8_t power;
-        float setTemp;
+        uint8_t irEnabled;
+        uint8_t reserved[7];
 
         uint8_t mode;
         uint8_t fan;
@@ -78,130 +92,91 @@ public:
         uint8_t rangeAuto[2];
         uint8_t rangeDehum[2];
 
-        // Temperature source: Internal, External, Average
         uint8_t tempSource;
-
-        // Eight temperature sensors, 4 bytes each
-        struct FlashTempSensor
-        {
-            uint8_t state;
-            uint8_t deviceSn;
-            uint8_t deviceId;
-            uint8_t channel;
-        };
-
-        FlashTempSensor tempSensors[TEMP_SENSOR_COUNT];
+        TempSensor tempSensors[TEMP_SENSOR_COUNT];
     };
 
     static_assert(sizeof(FlashHvac) <= 96, "FlashHvac exceeds its 96-byte flash slot");
+    static_assert(offsetof(FlashHvac, mode) == 12, "FlashHvac layout changed - stored records would break");
 
     explicit HVACPanel(MemoryCore &flash);
 
-    // -------------------------------------------------
     // Flash
-    // -------------------------------------------------
-
     void load();
+    bool update(); // true when the current unit's control state changed since last call
 
-    bool update();
-
-    // -------------------------------------------------
     // HVAC selection
-    // -------------------------------------------------
-
-    void setCurrentHvac(uint8_t index);
-    uint8_t currentHvac() const;
-
-    bool changeHvac(bool forward);
+    void setCurrentUnit(uint8_t index);
+    uint8_t currentUnit() const;
+    bool changeUnit(bool forward);
 
     State &currentState();
     const State &currentState() const;
-
     State &get(uint8_t index);
     const State &get(uint8_t index) const;
 
-    // -------------------------------------------------
     // HVAC validity
-    // -------------------------------------------------
-
     void setHvacValid(uint8_t index, bool valid);
     bool isHvacValid(uint8_t index) const;
-    // uint8_t hvacValidMask() const;
+    bool hasValidUnit() const;
+    void setHvacMember(uint8_t index, bool enabled, uint8_t deviceSn, uint8_t deviceId);
+    uint16_t address() const;
 
-    // -------------------------------------------------
     // Power
-    // -------------------------------------------------
-
     void setPower(bool power);
     bool power() const;
     void togglePower();
+    bool setPower(uint8_t index, bool power);
 
-    // -------------------------------------------------
     // Temperature
-    // -------------------------------------------------
-
     void setCurrentTemp(float temp);
     float currentTemp() const;
 
-    void setSetTemp(float temp);
+    bool setSetTemp(float temp);
     float setTemp() const;
-
     bool increaseTemp(float amount = 1.0f);
     bool decreaseTemp(float amount = 1.0f);
 
-    // -------------------------------------------------
+    bool setSetTempCool(uint8_t index, uint8_t temp);
+    bool setSetTempHeat(uint8_t index, uint8_t temp);
+    bool setSetTempAuto(uint8_t index, uint8_t temp);
+
+    uint8_t getSetTempCool() const;
+    uint8_t getSetTempHeat() const;
+    uint8_t getSetTempAuto() const;
+
+    void setIrEnabled(bool enabled);
+    bool irEnabled() const;
+    bool setIrEnabled(uint8_t index, bool enabled);
+
     // Mode
-    // -------------------------------------------------
-
     void setMode(uint8_t mode);
+    bool setMode(uint8_t index, uint8_t mode);
     uint8_t mode() const;
-
     bool nextMode();
-    void previousMode();
-
+    bool previousMode();
     void setModeValid(uint8_t mode, bool valid);
-    // bool isModeValid(uint8_t mode) const;
-
     void setModeValid(uint8_t hvacIndex, uint8_t mode, bool valid);
-    void setFanValid(uint8_t hvacIndex, uint8_t fan, bool valid);
 
-    // -------------------------------------------------
     // Fan
-    // -------------------------------------------------
-
     void setFan(uint8_t fan);
+    bool setFan(uint8_t index, uint8_t fan);
+    bool setAutoFan(uint8_t index, uint8_t fan);
     uint8_t fan() const;
-
     bool changeFan(bool forward);
-    // void nextFan();
-    // void previousFan();
-
     void setFanValid(uint8_t fan, bool valid);
+    void setFanValid(uint8_t hvacIndex, uint8_t fan, bool valid);
     bool isFanValid(uint8_t fan) const;
 
-    static constexpr uint16_t HVAC_IMAGE_SIZE = 240; // 64x30 / 8
-
+    // Icon of the *current* unit only (one shared buffer).
     const uint8_t *currentImage() const;
-    void fetchImage();
-    void fetchImage(uint8_t index);
-
-    void setHvacMember(uint8_t index, bool enabled, uint8_t deviceSn, uint8_t deviceId);
-    // void saveHvacSensors(uint8_t index);
-    // void fetchHvacSensors(uint8_t index);
+    void fetchImage();              // reload current unit's icon
+    void fetchImage(uint8_t index); // reloads only if index is the current unit
 
     void saveCurrent();
     void save(uint8_t index);
 
-    // bool hasValidHvac() const;
 private:
-    State hvac_[HVAC_COUNT];
-
-    uint8_t currentHvac_;
-
-    MemoryCore &flash_;
-
-    uint8_t images_[HVAC_COUNT][HVAC_IMAGE_SIZE];
-
     struct ControlSnapshot
     {
         bool power;
@@ -209,16 +184,28 @@ private:
         uint8_t mode;
         uint8_t fan;
         uint8_t autofan;
+
+        bool operator==(const ControlSnapshot &o) const
+        {
+            return power == o.power && setTemp == o.setTemp && mode == o.mode &&
+                   fan == o.fan && autofan == o.autofan;
+        }
     };
+
+    State hvac_[HVAC_COUNT];
+    uint8_t currentHvac_;
+    MemoryCore &flash_;
+
+    uint8_t image_[HVAC_IMAGE_SIZE]{};
 
     ControlSnapshot lastSent_[HVAC_COUNT]{};
     bool snapshotValid_[HVAC_COUNT]{};
 
-    void fetchHvacValid();
-    void fetchHvacValid(uint8_t index);
-    void fetchHvac(uint8_t index);
+    void fetchUnit(uint8_t index);
+    void saveUnit(uint8_t index);
+    void loadCurrentImage();
+    void refreshSelection(uint8_t changedIndex);
 
-    bool hasValidHvac() const;
-    void normalizeState(State &state);
-    void saveHvac(uint8_t index);
+    static void normalizeState(State &state);
+    static bool applySetpoint(State &state, uint8_t mode, float temp);
 };

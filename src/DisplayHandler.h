@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
 #include "HVACPanel.h"
+#include "FloorHeatPanel.h"
 #include "MemoryCore.h"
 
 #include "NTC.h"
@@ -86,7 +87,7 @@ static const char *power_texts[] = {"OFF", "ON"};
 
 static const char *hvac_speed[] = {"AUTO", "HIGH", "MEDI", "LOW"};
 
-static const char *fh_mode[] = {"Day", "Night", "Away", "Normal"};
+static const char *fh_mode[] = {"Normal", "Day", "Night", "Away"};
 
 class DisplayHandler
 {
@@ -97,6 +98,7 @@ public:
     // hvac is a non-owning reference to TouchModule's single HVACPanel
     // instance — DisplayHandler no longer keeps its own copy of HVAC state.
     void updateResource(const HVACPanel &hvac);
+    void updateResource(const FloorHeatPanel &fheat);
 
     void updateOutTemprature(const NTC &ntc);
     void updateInTemprature(const NTC &ntc);
@@ -205,19 +207,21 @@ private:
 
     // floorheat
 
-    bool fheatPower[4] = {
-        false, false, false, false};
+    const FloorHeatPanel *fheatPanel_ = nullptr;
 
-    float fheatCurrentTemp[4] = {
-        24.0, 24.0, 24.0, 24.0};
+    // bool fheatPower[4] = {
+    //     false, false, false, false};
 
-    float fheatSetTemp[4] = {
-        24.0, 24.0, 24.0, 24.0};
+    // float fheatCurrentTemp[4] = {
+    //     24.0, 24.0, 24.0, 24.0};
 
-    uint8_t fheatMode[4] = {
-        0, 0, 0, 0};
+    // float fheatSetTemp[4] = {
+    //     24.0, 24.0, 24.0, 24.0};
 
-    uint8_t currentFheat = 0;
+    // uint8_t fheatMode[4] = {
+    //     0, 0, 0, 0};
+
+    // uint8_t currentFheat = 0;
 
     ///////////////////////////////////////////////////////////////////
 
@@ -235,13 +239,15 @@ private:
     void drawSwitchPage();
 
     void drawHvacPage(const HVACPanel &hvac);
-    void drawFloorheatPage();
+    void drawFloorheatPage(const FloorHeatPanel &hvac);
     // void drawMusicPage();
 
     void drawHvacMode(uint8_t y, uint8_t mode);
     void drawHvacPower(uint8_t y, uint8_t power);
     void drawHvacTemp(uint8_t y, float_t current, float_t sensor);
-    void drawHvacSpeed(uint8_t y, uint8_t speed, bool autos);
+    void drawHvacSpeed(uint8_t y, uint8_t speed, uint8_t currentspeed);
+
+    void drawTemp(uint8_t y, float_t sensor);
 
     void drawFheatPower(uint8_t y, uint8_t power);
     void drawFheatTemp(uint8_t y, float_t current, float_t sensor);
