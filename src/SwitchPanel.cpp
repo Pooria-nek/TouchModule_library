@@ -267,7 +267,7 @@ uint8_t SwitchPanel::makeFunction(FunctionPacket &packet, uint8_t type, uint8_t 
         {
         case static_cast<uint8_t>(SwitchType::SingleON):
         case static_cast<uint8_t>(SwitchType::CombinationON):
-            packet.data[1] = 0x64;
+            packet.data[1] = function[4];
             break;
 
         case static_cast<uint8_t>(SwitchType::SingleOFF):
