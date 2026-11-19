@@ -271,6 +271,8 @@ public:
 
     void fetchProxValues();
 
+    void fetchTempValues();
+
     // --- Device mode: Sleep (uniform dim glow, any touch wakes) vs Wake
     //     (each channel independently shows a "high" or "low" LED state) ---
     enum class DeviceMode : uint8_t

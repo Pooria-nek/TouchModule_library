@@ -112,7 +112,7 @@ void NTC::read()
 
     addToBuffer(temperatureC);
 
-    temperature_ = getMovingAverage();
+    temperature_ = getMovingAverage() + calibrationOffset_ - 8;
 
     valid_ = true;
 }
@@ -162,24 +162,22 @@ bool NTC::valid() const
     return valid_;
 }
 
-void NTC::setCalibration(float offset)
+void NTC::setCalibration(uint8_t offset)
 {
-    if (offset > 8.0f)
-        offset = 8.0f;
+    if (offset > 18)
+        offset = 18;
 
-    if (offset < -8.0f)
-        offset = -8.0f;
+    if (offset < 2)
+        offset = 2;
 
     calibrationOffset_ = offset;
 
     // Immediately apply the new calibration
     if (valid_)
-        temperature_ =
-            getMovingAverage() +
-            calibrationOffset_;
+        temperature_ = getMovingAverage() + calibrationOffset_;
 }
 
-float NTC::calibration() const
+uint8_t NTC::calibration() const
 {
     return calibrationOffset_;
 }

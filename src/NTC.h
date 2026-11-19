@@ -19,8 +19,8 @@ public:
     uint16_t adc() const;
     bool valid() const;
 
-    void setCalibration(float offset);
-    float calibration() const;
+    void setCalibration(uint8_t offset);
+    uint8_t calibration() const;
 
 private:
     void read();

@@ -257,6 +257,14 @@ void TouchModule::fetchProxValues()
     // #endif
 }
 
+void TouchModule::fetchTempValues()
+{
+    uint8_t value[1] = {};
+    flash_.read(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::TEMP_CALIBRATE), value, 1);
+
+    outsideNtc.setCalibration(value[0]);
+}
+
 void TouchModule::buttonUpdate()
 {
 #ifdef HAS_OLED_DISPLAY
@@ -892,6 +900,7 @@ bool TouchModule::syncValues()
     fetchValidPages();
     fetchSleepValues();
     fetchProxValues();
+    fetchTempValues();
 
     return true;
 }
@@ -1805,7 +1814,7 @@ void TouchModule::handleReadAcInfo(const BusproFrame &frame)
     // uint8_t subnetid = 0;
     // uint8_t deviceid = 0;
 
-    uint8_t adjust = 10;
+    uint8_t adjust = outsideNtc.calibration();
 
     uint8_t type = 1;
     uint8_t state = 1;
@@ -1828,9 +1837,13 @@ void TouchModule::handleModifyAcInfo(const BusproFrame &frame)
     if (frame.payloadLen != 8)
         return;
 
-    constexpr uint8_t HVAC_INDEX_OFFSET = 4;
+    const uint8_t tempCalibrate[1] = {frame.payload[3]};
 
-    const uint8_t requestedHvac = frame.payload[HVAC_INDEX_OFFSET];
+    flash_.update(flash_.findAdrress(memoryaddress_, MemoryAdress::Touch::TEMP_CALIBRATE), tempCalibrate, 1);
+
+    fetchTempValues();
+
+    const uint8_t requestedHvac = frame.payload[4];
 
     if (requestedHvac == 0 || requestedHvac > HVACPanel::HVAC_COUNT)
         return;
