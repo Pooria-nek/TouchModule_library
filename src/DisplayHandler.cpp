@@ -30,7 +30,7 @@ void DisplayHandler::begin()
     // -------------------------------------------------
     // Default font
     // -------------------------------------------------
-    u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
+    setFont(1);
 
     // -------------------------------------------------
     // Startup
@@ -56,6 +56,40 @@ void DisplayHandler::updateOutTemprature(const NTC &ntc)
 void DisplayHandler::updateInTemprature(const NTC &ntc)
 {
     inTemp = ntc.temperature();
+}
+
+void DisplayHandler::setFont(uint8_t font_size)
+{
+    // u8g2_font_synchronizer_nbp_tr // num only
+    // u8g2_font_synchronizer_nbp_tf // full
+    // u8g2_font_6x10_tf
+    // u8g2_font_open_iconic_all_1x_t
+    // u8g2_font_luBS14_tn
+
+    if (font_size == 1)
+    {
+        u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
+    }
+
+    if (font_size == 2)
+    {
+        u8g2.setFont(u8g2_font_luBS14_tn);
+    }
+
+    if (font_size == 3)
+    {
+        u8g2.setFont(u8g2_font_6x10_tf);
+    }
+
+    if (font_size == 4)
+    {
+        u8g2.setFont(u8g2_font_open_iconic_all_1x_t);
+    }
+
+    if (font_size == 5)
+    {
+        u8g2.setFont(u8g2_font_twelvedings_t_all);
+    }
 }
 
 // void DisplayHandler::drawTemperature(const NTC &ntc, uint8_t x, uint8_t y)
@@ -187,6 +221,13 @@ bool DisplayHandler::changePage(bool forward)
 
 void DisplayHandler::drawContent()
 {
+
+    if (devPage_)
+    {
+        drawDeveloper();
+        return;
+    }
+
     // if (_sleeping && ecoMode)
     if (_sleeping)
     {
@@ -230,82 +271,91 @@ void DisplayHandler::drawScreen()
 // system pages drawer
 // *******************************************************************************************************
 
+bool DisplayHandler::getDeveloper()
+{
+    return devPage_;
+}
+
+void DisplayHandler::setDeveloper(bool state)
+{
+    devPage_ = state;
+}
+
+uint8_t DisplayHandler::getDeveloperPage()
+{
+    return devPageNum_;
+}
+
+void DisplayHandler::setDeveloperPage(uint8_t page)
+{
+    devPageNum_ = page;
+}
+
+void DisplayHandler::drawDeveloper()
+{
+    switch (devPageNum_)
+    {
+    case 0:
+        /* code */
+        return;
+
+    case 1:
+        drawSensorCheck();
+        return;
+
+    case 2:
+        drawAddressCheck();
+        return;
+
+        // case 3:
+        //     drawSetting();
+        //     break;
+    }
+}
+
+void DisplayHandler::drawSetting()
+{
+}
+
+void DisplayHandler::drawSensorCheck()
+{
+}
+
+void DisplayHandler::drawAddressCheck()
+{
+    // setFont(1);
+    // y_t = 0;
+    // // Loop over all label/value pairs
+    // for (uint8_t i = 0; i < sizeof(values) / sizeof(values[0]); i++)
+    // {
+    //     strcpy(buf, labels[i]); // copy label
+    //     itoa(*values[i], buf + strlen(buf), 10);
+    //     u8g2.drawStr(0, y_t, buf); // draw everything
+
+    //     y_t += inc;
+    // }
+
+    // // // Read firmware version ON OLED
+    // // u8g2.drawStr(20, 102, FW_VERSION);   // draw everything firmware
+    // // u8g2.drawStr(0, 116, FW_BUILD_DATE); // draw everything firmware
+
+    // // ---- Draw icons ----
+    // setFont(3);
+
+    // u8g2.drawGlyph(0, 96, 115); // Check icon
+    // if (address_reload)
+    // {
+    //     u8g2.drawGlyph(50, 96, 85); // Reload icon
+    // }
+    // else
+    // {
+    //     u8g2.drawGlyph(50, 96, 42); // Cross icon
+    // }
+}
+
 // *******************************************************************************************************
 // Idel pages drawer
 // *******************************************************************************************************
-
-// void DisplayHandler::drawScreensaver()
-// {
-//     static uint8_t x = 0;
-//     static uint8_t y = 0;
-
-//     // 0 = internal
-//     // 1 = external
-//     // 2 = both
-//     uint8_t temperatureMode = 1;
-
-//     constexpr uint8_t widgetWidth = 58;
-
-//     uint8_t widgetHeight;
-
-//     if (temperatureMode == 2)
-//         widgetHeight = 40;
-//     else
-//         widgetHeight = 20;
-
-//     x = 5;
-//     y = random(5, 128 - widgetHeight + 1);
-
-//     char buffer[6];
-
-//     // -------------------------
-//     // Internal temperature
-//     // -------------------------
-//     if (temperatureMode == 0)
-//     {
-//         u8g2.setFont(u8g2_font_luBS14_tn);
-
-//         int16_t whole = static_cast<int16_t>(inTemp);
-//         uint8_t decimal = static_cast<uint8_t>(fabsf(inTemp - whole) * 10.0f);
-
-//         snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
-
-//         u8g2.drawStr(x + 17, y + 11, buffer);
-//     }
-
-//     // -------------------------
-//     // External temperature
-//     // -------------------------
-//     if (temperatureMode == 1)
-//     {
-//         int16_t whole = static_cast<int16_t>(outTemp);
-//         uint8_t decimal = static_cast<uint8_t>(fabsf(outTemp - whole) * 10.0f);
-
-//         snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
-
-//         u8g2.setFont(u8g2_font_luBS14_tn);
-//         u8g2.drawStr(x, y, buffer);
-
-//         u8g2.setFont(u8g2_font_6x10_tr);
-//         u8g2.drawStr(x + 50, y - 3, "c");
-//     }
-
-//     // -------------------------
-//     // Both temperatures
-//     // -------------------------
-//     if (temperatureMode == 2)
-//     {
-//         int16_t whole = static_cast<int16_t>(outTemp);
-
-//         uint8_t decimal = static_cast<uint8_t>(fabsf(outTemp - whole) * 10.0f);
-
-//         snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
-
-//         u8g2.drawXBMP(x, y + 19, 13, 13, external_icon);
-
-//         u8g2.drawStr(x + 17, y + 30, buffer);
-//     }
-// }
 
 void DisplayHandler::drawScreensaver()
 {
@@ -321,11 +371,10 @@ void DisplayHandler::drawScreensaver()
     constexpr uint8_t singleHeight = 20;
     constexpr uint8_t dualHeight = 40;
 
-    const uint8_t widgetHeight =
-        (temperatureMode == 2) ? dualHeight : singleHeight;
+    const uint8_t widgetHeight = (temperatureMode == 2) ? dualHeight : singleHeight;
 
     x = 5;
-    y = random(5, 128 - widgetHeight + 1);
+    y = random(10, 100 - widgetHeight + 1);
 
     char buffer[8];
 
@@ -337,7 +386,7 @@ void DisplayHandler::drawScreensaver()
 
         snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
 
-        u8g2.setFont(u8g2_font_luBS14_tn);
+        setFont(2);
         u8g2.drawStr(posX, posY, buffer);
     };
 
@@ -346,14 +395,14 @@ void DisplayHandler::drawScreensaver()
     case 0: // Internal
         drawTemperature(inTemp, x, y + 15);
 
-        u8g2.setFont(u8g2_font_6x10_tr);
+        setFont(3);
         u8g2.drawStr(x + 50, y + 12, "c");
         break;
 
     case 1: // External
         drawTemperature(outTemp, x, y + 15);
 
-        u8g2.setFont(u8g2_font_6x10_tr);
+        setFont(3);
         u8g2.drawStr(x + 50, y + 12, "c");
         break;
 
@@ -440,7 +489,7 @@ void DisplayHandler::drawSwitchPage()
 
 void DisplayHandler::drawChangePointer(uint8_t y)
 {
-    u8g2.setFont(u8g2_font_open_iconic_all_1x_t);
+    setFont(4);
     u8g2.drawGlyph(0, y, 110);
     u8g2.drawGlyph(56, y, 111);
 }
@@ -484,7 +533,7 @@ void DisplayHandler::drawHvacPower(uint8_t y, uint8_t power)
 
 void DisplayHandler::drawHvacTemp(uint8_t y, float_t current, float_t sensor)
 {
-    u8g2.setFont(u8g2_font_6x10_tf);
+    setFont(3);
 
     const uint8_t x = 8;
     const uint8_t icon = 13;
@@ -508,12 +557,12 @@ void DisplayHandler::drawHvacTemp(uint8_t y, float_t current, float_t sensor)
 
     drawChangePointer(y + 11);
 
-    u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
+    setFont(1);
 }
 
 void DisplayHandler::drawTemp(uint8_t y, float_t sensor)
 {
-    u8g2.setFont(u8g2_font_luBS14_tn);
+    setFont(2);
 
     const uint8_t x = 6;
     const uint8_t icon = 13;
@@ -525,13 +574,13 @@ void DisplayHandler::drawTemp(uint8_t y, float_t sensor)
 
     snprintf(buffer, sizeof(buffer), "%d.%d", whole, decimal);
 
-    u8g2.setFont(u8g2_font_luBS14_tn);
+    setFont(2);
     u8g2.drawStr(x, y + 4, buffer);
 
-    u8g2.setFont(u8g2_font_6x10_tr);
+    setFont(3);
     u8g2.drawStr(x + 50, y + 1, "c");
 
-    u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
+    setFont(1);
 }
 
 void DisplayHandler::drawHvacSpeed(uint8_t y, uint8_t speed, uint8_t bar)
@@ -641,7 +690,7 @@ void DisplayHandler::drawHvacPage(const HVACPanel &hvac)
 
 void DisplayHandler::drawFheatPower(uint8_t y, uint8_t power)
 {
-    u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
+    setFont(1);
 
     const uint8_t x = 33;
     const uint8_t margin = (32 - 16) / 2;
@@ -654,7 +703,7 @@ void DisplayHandler::drawFheatPower(uint8_t y, uint8_t power)
 
 void DisplayHandler::drawFheatTemp(uint8_t y, float_t current, float_t sensor)
 {
-    u8g2.setFont(u8g2_font_6x10_tf);
+    setFont(3);
 
     const uint8_t x = 8;
     const uint8_t icon = 13;
@@ -680,12 +729,12 @@ void DisplayHandler::drawFheatTemp(uint8_t y, float_t current, float_t sensor)
 
     drawChangePointer(y + 11);
 
-    u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
+    setFont(1);
 }
 
 void DisplayHandler::drawFheatMode(uint8_t y, uint8_t mode)
 {
-    u8g2.setFont(u8g2_font_6x10_tf);
+    setFont(3);
 
     const uint8_t x = 8;
     const uint8_t icon = 13;
@@ -694,7 +743,7 @@ void DisplayHandler::drawFheatMode(uint8_t y, uint8_t mode)
 
     drawChangePointer(y + 11);
 
-    u8g2.setFont(u8g2_font_synchronizer_nbp_tf);
+    setFont(1);
 }
 
 void DisplayHandler::drawFloorheatPage(const FloorHeatPanel &fheat)
@@ -744,7 +793,7 @@ void DisplayHandler::drawFloorheatPage(const FloorHeatPanel &fheat)
     // u8g2.drawHLine(0, 60, 64);
     // u8g2.drawHLine(0, 90, 64);
 
-    // u8g2.setFont(u8g2_font_open_iconic_all_1x_t);
+    // setFont(4);
 }
 
 // music page texts
@@ -755,7 +804,7 @@ void DisplayHandler::drawFloorheatPage(const FloorHeatPanel &fheat)
 //     // u8g2.drawHLine(0, 60, 64);
 //     // u8g2.drawHLine(0, 90, 64);
 //     // drawCenteredText("Music");
-//     // u8g2.setFont(u8g2_font_open_iconic_all_1x_t);
+//     // setFont(4);
 
 //     u8g2.drawGlyph(4, 4, 210);
 //     // u8g2.drawGlyph(0, 4, 210);
@@ -769,13 +818,13 @@ void DisplayHandler::drawFloorheatPage(const FloorHeatPanel &fheat)
 //     u8g2.drawGlyph(52, 36, 216); // >|
 
 //     drawCenteredTextH(48, "music-name");
-//     // u8g2.setFont(u8g2_font_open_iconic_all_1x_t);
+//     // setFont(4);
 
 //     u8g2.drawGlyph(4, 66, 213);  // <<
 //     u8g2.drawGlyph(52, 66, 214); // >>
-//     // u8g2.setFont(u8g2_font_6x10_tf);
+//     // setFont(3);
 //     drawCenteredTextH(78, "Input-name");
-//     // u8g2.setFont(u8g2_font_open_iconic_all_1x_t);
+//     // setFont(4);
 
 //     u8g2.drawGlyph(4, 96, 278);  // valume up
 //     u8g2.drawGlyph(52, 96, 277); // valume down
@@ -938,53 +987,6 @@ void DisplayHandler::drawImage(const uint8_t image)
 // *******************************************************************************************************
 // *******************************************************************************************************
 
-// #ifdef OLDIE
-// void DisplayHandler::drawFooter()
-// {
-//     constexpr uint8_t FOOTER_Y = 120;
-//     constexpr uint8_t FOOTER_H = 8;
-//     constexpr uint8_t ITEM_W = 8;
-
-//     u8g2.setFont(u8g2_font_synchronizer_nbp_tr);
-
-//     // Footer background
-//     u8g2.setDrawColor(1);
-//     u8g2.drawBox(0, FOOTER_Y, 64, FOOTER_H);
-
-//     uint8_t x = 0;
-
-//     for (uint8_t page = 1; page <= PAGE_COUNT; ++page)
-//     {
-//         if (!isPageValid(page))
-//             continue;
-
-//         if (page == currentPage)
-//         {
-//             u8g2.setDrawColor(0);
-//             u8g2.drawBox(x, FOOTER_Y, ITEM_W, FOOTER_H);
-
-//             u8g2.setDrawColor(1);
-//             u8g2.drawStr(
-//                 x + 2,
-//                 FOOTER_Y,
-//                 String(page).c_str());
-//         }
-//         else
-//         {
-//             u8g2.setDrawColor(0);
-//             u8g2.drawStr(
-//                 x + 2,
-//                 FOOTER_Y,
-//                 String(page).c_str());
-//         }
-
-//         x += ITEM_W;
-//     }
-
-//     u8g2.setDrawColor(1);
-// }
-// #endif
-
 // #ifdef MODERN
 void DisplayHandler::drawFooter()
 {
@@ -994,7 +996,7 @@ void DisplayHandler::drawFooter()
     constexpr uint8_t GAP = 0;
     constexpr uint8_t FOOTER_W = 64;
 
-    u8g2.setFont(u8g2_font_synchronizer_nbp_tr);
+    setFont(1);
 
     // Footer background
     u8g2.setDrawColor(0);

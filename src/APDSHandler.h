@@ -212,6 +212,7 @@ public:
     bool setProximityThresholds(uint16_t farThreshold, uint16_t nearThreshold);
     bool isNear() const;
     bool isFar() const;
+    void setProximityNearThreshold(uint16_t threshold);
     uint16_t getProximityNearThreshold() const;
     uint16_t getProximityFarThreshold() const;
 
@@ -269,8 +270,8 @@ private:
     bool proximityNear_;
 
     /* Ambient light thresholds */
-    unsigned long darkThreshold_;
-    unsigned long brightThreshold_;
+    uint16_t darkThreshold_;
+    uint16_t brightThreshold_;
 
     /* Automatic display brightness */
     uint8_t minBrightness_;

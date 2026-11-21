@@ -204,6 +204,11 @@ bool APDSHandler::isFar() const
     return !proximityNear_;
 }
 
+void APDSHandler::setProximityNearThreshold(uint16_t threshold)
+{
+    proximityNearThreshold_ = threshold;
+}
+
 uint16_t APDSHandler::getProximityNearThreshold() const
 {
     return proximityNearThreshold_;

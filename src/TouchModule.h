@@ -315,6 +315,15 @@ private:
     // void applyTouchHardware(uint8_t channel);
     // void readMcuUID();
 
+    enum class ButtonComboState : uint8_t
+    {
+        IDLE,
+        WAITING_THIRD,
+        TRIGGERED
+    };
+
+    ButtonComboState buttonComboState_ = ButtonComboState::IDLE;
+
     uint8_t configMode = 0;
 
     // bool runSingle(uint8_t state, uint8_t button);

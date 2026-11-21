@@ -153,6 +153,12 @@ public:
     // void setSleeplevel(uint8_t brightness); // sleep level
     void setReturnPage(uint8_t page); // page number (0 = return off)
 
+    void setDeveloper(bool state);
+    void setDeveloperPage(uint8_t page);
+
+    bool getDeveloper();
+    uint8_t getDeveloperPage();
+
 private:
     MemoryCore &flash_;
 
@@ -173,6 +179,9 @@ private:
 
     uint8_t currentPage = 1;
     // uint8_t previosPage = 7;
+
+    bool devPage_ = false;
+    uint8_t devPageNum_ = 0;
 
     bool _sleeping = false;
 
@@ -230,7 +239,13 @@ private:
 
     // void drawBootupPage();
     // void drawLoadingPage();
-    // void drawSettingPage();
+
+    void setFont(uint8_t font_size);
+
+    void drawDeveloper();
+    void drawSetting();
+    void drawSensorCheck();
+    void drawAddressCheck();
 
     void drawScreensaver();
 
